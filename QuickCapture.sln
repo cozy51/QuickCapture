@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{FE582024-D0F1-4E88-AC58-000A96969E53}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickCapture", "src\QuickCapture\QuickCapture.csproj", "{37BA0D15-104E-4824-ADCF-34BDF83A1CD7}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{649953D9-B205-43F0-8B21-4887F1568E02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickCapture.Tests", "tests\QuickCapture.Tests\QuickCapture.Tests.csproj", "{D0E0E942-F1C2-41AA-9713-27CE2E3ADC72}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{37BA0D15-104E-4824-ADCF-34BDF83A1CD7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{37BA0D15-104E-4824-ADCF-34BDF83A1CD7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{37BA0D15-104E-4824-ADCF-34BDF83A1CD7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{37BA0D15-104E-4824-ADCF-34BDF83A1CD7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0E0E942-F1C2-41AA-9713-27CE2E3ADC72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0E0E942-F1C2-41AA-9713-27CE2E3ADC72}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0E0E942-F1C2-41AA-9713-27CE2E3ADC72}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0E0E942-F1C2-41AA-9713-27CE2E3ADC72}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{37BA0D15-104E-4824-ADCF-34BDF83A1CD7} = {FE582024-D0F1-4E88-AC58-000A96969E53}
+		{D0E0E942-F1C2-41AA-9713-27CE2E3ADC72} = {649953D9-B205-43F0-8B21-4887F1568E02}
+	EndGlobalSection
+EndGlobal

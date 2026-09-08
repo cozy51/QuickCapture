@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/QuickCapture.ico</ApplicationIcon>
+    <AssemblyName>QuickCapture</AssemblyName>
+    <Version>1.7.0</Version>
+    <!-- WPF owns startup/DPI; WinForms is used only for the notification icon. -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+  <ItemGroup><Resource Include="Assets/QuickCapture.ico"/></ItemGroup>
+</Project>
