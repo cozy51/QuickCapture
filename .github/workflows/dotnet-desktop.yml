@@ -1,0 +1,32 @@
+name: Build QuickCapture
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+          .\scripts\build.ps1 -Publish
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickCapture-Windows
+          path: artifacts/win-x64/
