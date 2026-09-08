@@ -86,7 +86,11 @@ public partial class App : Application
                 throw;
             }
             settings = next;
-            foreach (var window in Windows.OfType<CaptureWindow>()) window.SetExportBorder(next.ExportBorderEnabled);
+            foreach (var window in Windows.OfType<CaptureWindow>())
+            {
+                window.SetExportBorder(next.ExportBorderEnabled);
+                window.SetExportHeader(next.ExportHeaderEnabled);
+            }
         });
         settingsWindow.Closed += (_, _) => settingsWindow = null;
         settingsWindow.Show();

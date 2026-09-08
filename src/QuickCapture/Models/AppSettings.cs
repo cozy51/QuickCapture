@@ -16,6 +16,7 @@ public sealed record AppSettings
     public bool CloseAfterCopy { get; set; }
     public bool AutoCloseCaptures { get; set; }
     public bool ExportBorderEnabled { get; set; } = true;
+    public bool ExportHeaderEnabled { get; set; }
 
     public void Validate()
     {

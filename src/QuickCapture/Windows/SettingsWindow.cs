@@ -33,6 +33,7 @@ public sealed class SettingsWindow : Window
         var topmost = new CheckBox { Content = "新しい画像を常に手前に表示", IsChecked = settings.AlwaysOnTop, Margin = new Thickness(0, 18, 0, 10) }; panel.Children.Add(topmost);
         var annotations = new CheckBox { Content = "コピーにマーキングを含める", IsChecked = settings.CopyIncludesAnnotations, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(annotations);
         var exportBorder = new CheckBox { Content = "コピー・PNG保存画像に薄いグレーの外枠を付ける", IsChecked = settings.ExportBorderEnabled, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(exportBorder);
+        var exportHeader = new CheckBox { Content = "コピー・PNG保存画像に上部の情報バーを含める", IsChecked = settings.ExportHeaderEnabled, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(exportHeader);
         var close = new CheckBox { Content = "コピー成功後に画像ウィンドウを閉じる", IsChecked = settings.CloseAfterCopy }; panel.Children.Add(close);
         var autoClose = new CheckBox { Content = "新しいキャプチャを3秒で閉じる", IsChecked = settings.AutoCloseCaptures, Margin = new Thickness(0, 10, 0, 0) }; panel.Children.Add(autoClose);
         var error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) }; panel.Children.Add(error);
@@ -44,6 +45,7 @@ public sealed class SettingsWindow : Window
                 if (!double.TryParse(width.Text, out double pixels)) throw new ArgumentException("線幅を数値で入力してください。");
                 var next = settings with { GlobalShortcut = shortcut.Text.Trim(), HighlighterColor = (string)((ComboBoxItem)color.SelectedItem).Tag, HighlighterWidth = pixels, AlwaysOnTop = topmost.IsChecked == true, CopyIncludesAnnotations = annotations.IsChecked == true, CloseAfterCopy = close.IsChecked == true, AutoCloseCaptures = autoClose.IsChecked == true };
                 next.ExportBorderEnabled = exportBorder.IsChecked == true;
+                next.ExportHeaderEnabled = exportHeader.IsChecked == true;
                 next.Validate(); apply(next); Close();
             }
             catch (Exception ex) { error.Text = ex.Message; }

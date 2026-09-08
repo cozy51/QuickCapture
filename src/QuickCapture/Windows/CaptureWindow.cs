@@ -61,9 +61,11 @@ public sealed class CaptureWindow : Window
         var grid = new Grid { ClipToBounds = true };
         frame = new CaptureFrame { Child = grid, CapturedAt = document.CapturedAt };
         Content = frame;
+        frame.CloseRequested += Close;
         frame.MouseLeftButtonDown += (_, e) =>
         {
-            if (e.GetPosition(frame).Y < CaptureFrame.HeaderHeight) { e.Handled = true; DragMove(); }
+            var point = e.GetPosition(frame);
+            if (point.Y < CaptureFrame.HeaderHeight && !frame.IsOverCloseButton(point)) { e.Handled = true; DragMove(); }
         };
         grid.Children.Add(viewport);
         toolbar = new CaptureToolbar(DragMove, () => _ = CopyAsync(), viewport.ToggleHighlighter, Undo, viewport.ActualSize, viewport.Fit, Save, Close) { Visibility = Visibility.Collapsed };
@@ -94,12 +96,13 @@ public sealed class CaptureWindow : Window
         Loaded += (_, _) => { CaptureWindowRegistry.Register(this); if (AutoCloseEnabled) autoCloseTimer.Start(); };
         IsVisibleChanged += (_, _) => CaptureWindowRegistry.Refresh();
         StateChanged += (_, _) => CaptureWindowRegistry.Refresh();
-        Deactivated += (_, _) => { viewport.CancelInteraction(); toolbar.Visibility = Visibility.Collapsed; };
+        Deactivated += (_, _) => { viewport.CancelInteraction(); toolbar.Visibility = Visibility.Collapsed; frame.CancelPointer(); };
         Closed += (_, _) =>
         {
             closed = true; statusTimer.Stop(); statusTimer.Tick -= StatusExpired;
             autoCloseTimer.Stop(); autoCloseTimer.Tick -= AutoCloseExpired;
             CaptureWindowRegistry.Unregister(this);
+            frame.CloseRequested -= Close;
             source?.RemoveHook(WindowMessage); source = null;
             viewport.ViewChanged -= ViewChanged; viewport.Dispose();
             ContextMenu = null; Content = null; document.Dispose();
@@ -115,6 +118,10 @@ public sealed class CaptureWindow : Window
         if (enabled && IsLoaded) autoCloseTimer.Start();
     }
     internal void SetExportBorder(bool enabled) => settings.ExportBorderEnabled = enabled;
+    internal void SetExportHeader(bool enabled) => settings.ExportHeaderEnabled = enabled;
+    /// The header of this window as copy and save should record it, or null while
+    /// the export is the image alone.
+    private CaptureHeaderInfo? ExportHeader => settings.ExportHeaderEnabled ? frame.Header : null;
     private void SetNextCapturesAutoClose(bool enabled)
     {
         try
@@ -270,6 +277,13 @@ public sealed class CaptureWindow : Window
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
         Add("PNGで保存…", "Ctrl+S", Save);
+        var exportHeader = new MenuItem { Header = "コピー・保存に上部バーを含める", IsCheckable = true };
+        exportHeader.Click += (_, _) =>
+        {
+            SetExportHeader(exportHeader.IsChecked);
+            ShowStatus(exportHeader.IsChecked ? "コピー・保存に番号・日付・時刻の帯を含めます" : "コピー・保存は画像だけにします");
+        };
+        menu.Items.Add(exportHeader);
         menu.Items.Add(new Separator());
         Add("等倍表示", "1 / Ctrl+0", viewport.ActualSize);
         Add("ウィンドウに合わせる", "F", viewport.Fit);
@@ -295,6 +309,7 @@ public sealed class CaptureWindow : Window
         {
             viewport.CancelInteraction(); toggle.IsChecked = viewport.IsHighlighting; topmost.IsChecked = Topmost;
             autoClose.IsChecked = getNextAutoClose(); retain.Visibility = AutoCloseEnabled ? Visibility.Visible : Visibility.Collapsed;
+            exportHeader.IsChecked = settings.ExportHeaderEnabled;
         };
         return menu;
     }
@@ -306,7 +321,7 @@ public sealed class CaptureWindow : Window
         try
         {
             viewport.CancelInteraction();
-            if (!await clipboard.CopyAsync(exporter.Compose(document, settings.CopyIncludesAnnotations, settings.ExportBorderEnabled))) return;
+            if (!await clipboard.CopyAsync(exporter.Compose(document, settings.CopyIncludesAnnotations, settings.ExportBorderEnabled, ExportHeader))) return;
             if (closed) return;
             ShowStatus("コピーしました"); if (settings.CloseAfterCopy) Close();
         }
@@ -323,7 +338,7 @@ public sealed class CaptureWindow : Window
         if (manualCopyRequested) return;
         try
         {
-            if (await clipboard.CopyAsync(settings.ExportBorderEnabled ? ImageExportService.AddBorder(image) : image)) ShowStatus("キャプチャをコピーしました");
+            if (await clipboard.CopyAsync(ImageExportService.Decorate(image, settings.ExportBorderEnabled, ExportHeader))) ShowStatus("キャプチャをコピーしました");
         }
         catch (Exception ex) { ShowStatus("自動コピーできません: " + ex.Message); }
         // CloseAfterCopy applies only to an explicit copy, not capture-time copying.
@@ -336,7 +351,7 @@ public sealed class CaptureWindow : Window
         try
         {
             if (dialog.ShowDialog(this) != true) return;
-            exporter.SavePng(document, dialog.FileName, settings.ExportBorderEnabled); ShowStatus("保存しました");
+            exporter.SavePng(document, dialog.FileName, settings.ExportBorderEnabled, ExportHeader); ShowStatus("保存しました");
         }
         catch (Exception ex) { ShowStatus("保存できません: " + ex.Message); }
         finally { if (!closed && AutoCloseEnabled) autoCloseTimer.Start(); }
