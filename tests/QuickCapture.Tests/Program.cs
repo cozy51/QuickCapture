@@ -43,12 +43,14 @@ internal static class Program
                 Run("Undo / redo / clear / branching / history limit", History);
                 Run("Highlighter source pixels / opacity / PNG", Rendering);
                 Run("Export border / intact edge pixels / annotations / PNG / opt-out", ExportBorder);
+                Run("Header record / band above the capture / close button excluded", ExportHeader);
                 Run("Axis correction / preserves curves / corrected Undo and export", Straightening);
                 Run("Crop owns only selected pixels", Crop);
                 Run("Settings validation / persistence / corrupt JSON", Settings);
                 Run("Global shortcut conflict and cleanup", Hotkey);
                 await WindowsAndMemory();
                 await CaptureSequence();
+                await HeaderCloseButton();
                 await AutoCloseWindows();
                 await NextCaptureMode();
                 await ZoomWindowSizing();
@@ -386,6 +388,77 @@ internal static class Program
         }
         File.Delete(path);
     }
+    /// Pixels in <paramref name="area"/> that differ from the dark header band.
+    private static int Ink(BitmapSource image, Int32Rect area)
+    {
+        var pixels = new byte[area.Width * area.Height * 4];
+        image.CopyPixels(area, pixels, area.Width * 4, 0);
+        int count = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+            if (pixels[i] != 32 || pixels[i + 1] != 27 || pixels[i + 2] != 24) count++;
+        return count;
+    }
+    private static void ExportHeader()
+    {
+        var captured = new DateTimeOffset(2026, 9, 9, 12, 34, 56, TimeSpan.FromHours(9));
+        using var doc = new ImageDocument(White(640, 200), captured);
+        var exporter = new ImageExportService();
+        var info = new CaptureHeaderInfo(2, 3, captured);
+        int band = (int)CaptureHeader.Height;
+        var recorded = exporter.Compose(doc, includeBorder: false, header: info);
+        Assert(recorded.PixelWidth == 640 && recorded.PixelHeight == 200 + band && recorded.IsFrozen, "Recorded image adds the header band above the capture");
+        var original = new byte[640 * 200 * 4]; var below = new byte[original.Length];
+        doc.Image!.CopyPixels(original, 2560, 0);
+        recorded.CopyPixels(new Int32Rect(0, band, 640, 200), below, 2560, 0);
+        Assert(original.SequenceEqual(below), "Original pixels stay intact below the band");
+        Assert(Ink(recorded, new Int32Rect(0, 0, 44, band)) > 20, "Band carries the capture number");
+        Assert(Ink(recorded, new Int32Rect(280, 0, 80, band)) > 20, "Band carries the capture time");
+        Assert(Ink(recorded, new Int32Rect(550, 0, 80, band)) > 20, "Band carries the capture date");
+        Assert(Ink(recorded, new Int32Rect(631, 0, 9, band)) == 0, "Recorded band leaves out the close button");
+        var framed = exporter.Compose(doc, includeBorder: true, header: info);
+        Assert(framed.PixelWidth == 642 && framed.PixelHeight == 202 + band, "Header band and gray border combine");
+        var pixel = new byte[4];
+        framed.CopyPixels(new Int32Rect(0, band, 1, 1), pixel, 4, 0);
+        Assert(pixel[0] == 200 && pixel[1] == 200 && pixel[2] == 200, "Gray border starts below the band");
+        framed.CopyPixels(new Int32Rect(639, 0, 1, 1), pixel, 4, 0);
+        Assert(pixel[0] == 32 && pixel[1] == 27 && pixel[2] == 24 && pixel[3] == 255, "Band spans the full width in the dark frame color");
+        Assert(ReferenceEquals(exporter.Compose(doc, includeBorder: false, header: null), doc.Image), "Opting out keeps the untouched original");
+        Assert(ReferenceEquals(ImageExportService.Decorate(doc.Image!, false, null), doc.Image), "Capture-time copy without decorations is the original");
+        Assert(ImageExportService.Decorate(doc.Image!, true, info).PixelHeight == 202 + band, "Capture-time copy records the band as well");
+        Directory.CreateDirectory(Path.Combine(root, "artifacts"));
+        string path = Path.Combine(root, "artifacts", "header-test.png");
+        exporter.SavePng(doc, path, includeBorder: false, header: info);
+        using (var stream = File.OpenRead(path))
+        {
+            var saved = BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            Assert(saved.PixelWidth == 640 && saved.PixelHeight == 200 + band, "PNG keeps the header band");
+        }
+        File.Delete(path);
+    }
+    private static async Task HeaderCloseButton()
+    {
+        var captured = new DateTimeOffset(2026, 9, 9, 12, 34, 56, TimeSpan.FromHours(9));
+        using var doc = new ImageDocument(White(400, 240), captured);
+        var window = new CaptureWindow(doc, new Int32Rect(200, 200, 400, 240));
+        bool closed = false; window.Closed += (_, _) => closed = true;
+        try
+        {
+            window.Show(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+            var frame = (CaptureFrame)window.Content;
+            var button = frame.CloseButton;
+            Assert(button.Top == 0 && button.Height == CaptureFrame.HeaderHeight && Math.Abs(button.Right - frame.ActualWidth) < 0.5, "Close button occupies the top-right corner of the header");
+            var corner = new Point(button.X + button.Width / 2, button.Height / 2);
+            Assert(frame.IsOverCloseButton(corner) && !frame.IsOverCloseButton(new Point(12, corner.Y)), "Only the corner belongs to the close button");
+            Assert(!frame.IsOverCloseButton(new Point(corner.X, CaptureFrame.HeaderHeight + 6)), "The image area below the header is never the close button");
+            Assert(!frame.BeginClose(new Point(12, corner.Y)), "Pressing the header elsewhere still moves the window");
+            Assert(frame.BeginClose(corner) && !frame.CompleteClose(new Point(12, corner.Y)) && !closed, "Releasing away from the button cancels the close");
+            Assert(frame.BeginClose(corner) && frame.CompleteClose(corner), "Clicking the button closes the window");
+            Assert(closed && doc.Image == null, "Close button releases the image like Delete");
+        }
+        finally { window.Close(); }
+        passed++; Console.WriteLine("PASS Header close button / corner hit area / cancelled press / releases image");
+    }
     private static void Straightening()
     {
         var horizontal = StrokeStraightener.Snap(new[] { new Point(10, 20), new Point(60, 23), new Point(110, 26) });
@@ -430,10 +503,10 @@ internal static class Program
     private static void Settings()
     {
         string path = Path.Combine(root, "artifacts", "test-settings.json"); var service = new SettingsService(path);
-        var settings = new AppSettings { GlobalShortcut = "Ctrl+Alt+Q", HighlighterWidth = 34, CloseAfterCopy = true, AutoCloseCaptures = true, ExportBorderEnabled = false };
+        var settings = new AppSettings { GlobalShortcut = "Ctrl+Alt+Q", HighlighterWidth = 34, CloseAfterCopy = true, AutoCloseCaptures = true, ExportBorderEnabled = false, ExportHeaderEnabled = true };
         service.Save(settings); Assert(service.Load() == settings, "Settings roundtrip");
         File.WriteAllText(path, "{}"); Assert(!service.Load().AutoCloseCaptures, "Older settings default to retaining captures");
-        Assert(service.Load().ExportBorderEnabled, "Older settings enable export border by default");
+        Assert(service.Load().ExportBorderEnabled && !service.Load().ExportHeaderEnabled, "Older settings enable the export border and record no header band");
         File.WriteAllText(path, "{bad"); Assert(service.Load().GlobalShortcut == "Ctrl+Shift+R" && service.LoadWarning != null, "Corrupt JSON fallback");
         bool invalid = false; try { AppSettings.ParseShortcut("R"); } catch (ArgumentException) { invalid = true; } Assert(invalid, "Unmodified key rejected");
         File.Delete(path);
