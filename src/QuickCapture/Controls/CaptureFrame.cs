@@ -18,6 +18,8 @@ internal sealed class CaptureFrame : Border
     internal const double HeaderHeight = CaptureHeader.Height;
     internal const double CloseButtonWidth = CaptureHeader.CloseButtonWidth;
     internal bool AutoClose { get; set; }
+    /// Copy and save include the header band; the band turns deep blue to show it.
+    internal bool RecordHeader { get; set; }
     internal int CaptureNumber { get; set; }
     internal int CaptureCount { get; set; }
     internal DateTimeOffset CapturedAt { get; set; }
@@ -105,6 +107,7 @@ internal sealed class CaptureFrame : Border
     {
         base.OnRender(dc);
         double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        dc.DrawRectangle(CaptureHeader.BandBrush(RecordHeader), null, new Rect(0, 0, ActualWidth, HeaderHeight));
         CaptureHeader.Render(dc, ActualWidth, dpi, Header, CloseButtonWidth, AutoClose ? "3秒で閉じる" : null, TemporaryOutline.Brush);
         RenderCloseButton(dc);
         double inset = Thickness / 2;

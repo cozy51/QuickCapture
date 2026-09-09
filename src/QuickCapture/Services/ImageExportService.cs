@@ -32,7 +32,7 @@ public sealed class ImageExportService
             {
                 // The close button is a control rather than part of the record,
                 // so the exported band keeps a plain margin in its place.
-                dc.DrawRectangle(CaptureHeader.Background, null, new Rect(0, 0, width, band));
+                dc.DrawRectangle(CaptureHeader.RecordBackground, null, new Rect(0, 0, width, band));
                 CaptureHeader.Render(dc, width, 1, header.Value, 0);
                 dc.PushTransform(new TranslateTransform(0, band));
             }
