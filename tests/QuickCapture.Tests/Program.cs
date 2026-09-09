@@ -51,6 +51,7 @@ internal static class Program
                 await WindowsAndMemory();
                 await CaptureSequence();
                 await HeaderCloseButton();
+                await RecordHeaderMode(args.Contains("--integration"));
                 await AutoCloseWindows();
                 await NextCaptureMode();
                 await ZoomWindowSizing();
@@ -388,14 +389,14 @@ internal static class Program
         }
         File.Delete(path);
     }
-    /// Pixels in <paramref name="area"/> that differ from the dark header band.
+    /// Pixels in <paramref name="area"/> that differ from the recorded blue band.
     private static int Ink(BitmapSource image, Int32Rect area)
     {
         var pixels = new byte[area.Width * area.Height * 4];
         image.CopyPixels(area, pixels, area.Width * 4, 0);
         int count = 0;
         for (int i = 0; i < pixels.Length; i += 4)
-            if (pixels[i] != 32 || pixels[i + 1] != 27 || pixels[i + 2] != 24) count++;
+            if (pixels[i] != 118 || pixels[i + 1] != 62 || pixels[i + 2] != 21) count++;
         return count;
     }
     private static void ExportHeader()
@@ -421,7 +422,7 @@ internal static class Program
         framed.CopyPixels(new Int32Rect(0, band, 1, 1), pixel, 4, 0);
         Assert(pixel[0] == 200 && pixel[1] == 200 && pixel[2] == 200, "Gray border starts below the band");
         framed.CopyPixels(new Int32Rect(639, 0, 1, 1), pixel, 4, 0);
-        Assert(pixel[0] == 32 && pixel[1] == 27 && pixel[2] == 24 && pixel[3] == 255, "Band spans the full width in the dark frame color");
+        Assert(pixel[0] == 118 && pixel[1] == 62 && pixel[2] == 21 && pixel[3] == 255, "Band spans the full width in the deep blue recording color");
         Assert(ReferenceEquals(exporter.Compose(doc, includeBorder: false, header: null), doc.Image), "Opting out keeps the untouched original");
         Assert(ReferenceEquals(ImageExportService.Decorate(doc.Image!, false, null), doc.Image), "Capture-time copy without decorations is the original");
         Assert(ImageExportService.Decorate(doc.Image!, true, info).PixelHeight == 202 + band, "Capture-time copy records the band as well");
@@ -458,6 +459,58 @@ internal static class Program
         }
         finally { window.Close(); }
         passed++; Console.WriteLine("PASS Header close button / corner hit area / cancelled press / releases image");
+    }
+    private static async Task RecordHeaderMode(bool useClipboard)
+    {
+        var preferences = new AppSettings();
+        var opened = new List<CaptureWindow>();
+        CaptureWindow Create()
+        {
+            var window = new CaptureWindow(new ImageDocument(White()), new Int32Rect(200, 200, 200, 100), preferences with { }, null, null,
+                enabled =>
+                {
+                    preferences = preferences with { ExportHeaderEnabled = enabled };
+                    foreach (var open in opened) open.SetExportHeader(enabled);
+                });
+            opened.Add(window); window.Show(); return window;
+        }
+        MenuItem Mode(CaptureWindow window)
+        {
+            window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            return window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "コピー・保存に上部バーを含める");
+        }
+        void SetMode(CaptureWindow window, bool enabled)
+        {
+            var item = Mode(window); item.IsChecked = enabled;
+            item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        }
+        int band = (int)CaptureHeader.Height;
+        try
+        {
+            var original = Create(); var peer = Create();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            Assert(!((CaptureFrame)original.Content).RecordHeader, "Images start without the recording band");
+            SetMode(original, true);
+            Assert(preferences.ExportHeaderEnabled && Mode(peer).IsChecked, "Right-click switching is shared by the open images");
+            Assert(((CaptureFrame)original.Content).RecordHeader && ((CaptureFrame)peer.Content).RecordHeader, "Every open image marks the recording band");
+            var next = Create();
+            Assert(((CaptureFrame)next.Content).RecordHeader && Mode(next).IsChecked, "Later captures continue recording the band");
+            if (useClipboard)
+            {
+                await Task.Delay(300);
+                Assert(Clipboard.GetImage()?.PixelHeight == 102 + band, "Switching on copies the image again with the band");
+            }
+            SetMode(next, false);
+            Assert(!preferences.ExportHeaderEnabled && !((CaptureFrame)original.Content).RecordHeader, "Switching off reaches every open image");
+            if (useClipboard)
+            {
+                await Task.Delay(300);
+                Assert(Clipboard.GetImage()?.PixelHeight == 102, "Switching off copies the plain image again");
+            }
+            Assert(opened.TrueForAll(window => window.IsVisible), "Re-copying on switch never closes the image");
+        }
+        finally { foreach (var window in opened) window.Close(); }
+        passed++; Console.WriteLine("PASS Right-click recording mode / shared by open images / later captures / immediate re-copy");
     }
     private static void Straightening()
     {

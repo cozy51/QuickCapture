@@ -33,7 +33,7 @@ public partial class App : Application
         capture.Failed += ex => Notify("キャプチャできませんでした: " + ex.Message);
         capture.Captured += (image, rect) =>
         {
-            var window = new CaptureWindow(new ImageDocument(image), rect, settings with { }, () => settings.AutoCloseCaptures, SetNextCapturesAutoClose);
+            var window = new CaptureWindow(new ImageDocument(image), rect, settings with { }, () => settings.AutoCloseCaptures, SetNextCapturesAutoClose, SetExportHeaderPreference);
             window.Show();
             _ = window.CopyInitialCaptureAsync();
         };
@@ -70,6 +70,13 @@ public partial class App : Application
     {
         var next = settings with { AutoCloseCaptures = enabled };
         settingsService.Save(next); settings = next;
+    }
+    /// Right-click switching on any image: save it and apply it to every open one.
+    private void SetExportHeaderPreference(bool enabled)
+    {
+        var next = settings with { ExportHeaderEnabled = enabled };
+        settingsService.Save(next); settings = next;
+        foreach (var window in Windows.OfType<CaptureWindow>()) window.SetExportHeader(enabled);
     }
     private void OpenSettings()
     {

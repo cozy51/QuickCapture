@@ -17,6 +17,9 @@ internal static class CaptureHeader
     /// Symmetric text margin used when nothing occupies the right corner.
     internal const double Margin = 11;
     internal static readonly Brush Background = Frozen(Color.FromRgb(24, 27, 32));
+    /// Deep blue band: this capture copies and saves the header with the image.
+    internal static readonly Brush RecordBackground = Frozen(Color.FromRgb(21, 62, 118));
+    internal static Brush BandBrush(bool recording) => recording ? RecordBackground : Background;
     private static readonly Brush NumberBrush = Frozen(Color.FromRgb(120, 240, 171));
     private static readonly Brush DateBrush = Frozen(Color.FromRgb(176, 184, 196));
     private static readonly Typeface NumberFace = new("Segoe UI Semibold");
