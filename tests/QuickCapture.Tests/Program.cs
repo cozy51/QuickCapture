@@ -38,6 +38,7 @@ internal static class Program
             {
                 Run("Physical selection / negative monitor coordinates", Geometry);
                 Run("Zoom anchors / DPI 100, 125, 150% / pan", Zoom);
+                Run("Frame border and band keep their pixel size at any scaling", FrameMetrics);
                 Run("Left drag moves / Alt or Space pans / H or Ctrl draws", DragMapping);
                 Run("Embedded multi-resolution application and tray icons", Icons);
                 Run("Undo / redo / clear / branching / history limit", History);
@@ -108,6 +109,19 @@ internal static class Program
         moving.SetDpi(1.5, anchor); Near(moving.ToImage(anchor).X, source.X, "Monitor transition anchor");
     }
     private static HighlighterStroke Stroke(double y = 50) => new(new[] { new Point(20, y), new Point(80, y), new Point(180, y) }, Colors.Yellow, 20, 0.45);
+    /// The window frame is drawn in physical pixels: moving a capture to a monitor
+    /// with another scaling must not change the border, the band or the dashes.
+    private static void FrameMetrics()
+    {
+        foreach (double scaling in new[] { 1d, 1.25, 1.5, 2d })
+        {
+            var metrics = CaptureFrame.Metrics(scaling);
+            Near(metrics.Left * scaling, CaptureFrame.Thickness, "Left border pixels");
+            Near(metrics.Right * scaling, CaptureFrame.Thickness, "Right border pixels");
+            Near(metrics.Bottom * scaling, CaptureFrame.Thickness, "Bottom border pixels");
+            Near((metrics.Top - metrics.Bottom) * scaling, CaptureFrame.HeaderHeight, "Header band pixels");
+        }
+    }
     private static void DragMapping()
     {
         Assert(ImageViewport.ResolveDrag(false, ModifierKeys.None, false) == ImageViewport.DragAction.MoveWindow, "Default left drag moves window");
@@ -156,8 +170,8 @@ internal static class Program
             second.Close(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             Assert(first.CaptureCount == 2 && third.CaptureNumber == 2 && third.CaptureCount == 2, "Closing renumbers remaining captures");
             Assert(first.CapturedAt == captured && first.Title.Contains(captured.ToLocalTime().ToString("HH:mm:ss")), "Capture timestamp remains fixed");
-            var frame = (Border)first.Content;
-            Assert(frame.Child.TranslatePoint(new Point(), frame).Y >= CaptureFrame.HeaderHeight, "Metadata sits above the image border");
+            var frame = (CaptureFrame)first.Content;
+            Assert(frame.Child.TranslatePoint(new Point(), frame).Y >= frame.BandHeight, "Metadata sits above the image border");
             firstDoc.Add(Stroke());
             var exported = new ImageExportService().Compose(firstDoc);
             Assert(exported.PixelWidth == 200 && exported.PixelHeight == 100, "Metadata and frame excluded from image export");
@@ -448,10 +462,13 @@ internal static class Program
             window.UpdateLayout();
             var frame = (CaptureFrame)window.Content;
             var button = frame.CloseButton;
-            Assert(button.Top == 0 && button.Height == CaptureFrame.HeaderHeight && Math.Abs(button.Right - frame.ActualWidth) < 0.5, "Close button occupies the top-right corner of the header");
+            Assert(button.Top == 0 && Math.Abs(button.Height - frame.BandHeight) < 0.01 && Math.Abs(button.Right - frame.ActualWidth) < 0.5, "Close button occupies the top-right corner of the header");
             var corner = new Point(button.X + button.Width / 2, button.Height / 2);
             Assert(frame.IsOverCloseButton(corner) && !frame.IsOverCloseButton(new Point(12, corner.Y)), "Only the corner belongs to the close button");
-            Assert(!frame.IsOverCloseButton(new Point(corner.X, CaptureFrame.HeaderHeight + 6)), "The image area below the header is never the close button");
+            Assert(!frame.IsOverCloseButton(new Point(corner.X, frame.BandHeight + 6)), "The image area below the header is never the close button");
+            double scaling = VisualTreeHelper.GetDpi(frame).DpiScaleX;
+            Near(frame.BandHeight * scaling, CaptureFrame.HeaderHeight, "Shown band matches the exported band in pixels");
+            Near(frame.BorderThickness.Left * scaling, CaptureFrame.Thickness, "Shown border keeps its pixel width");
             Assert(!frame.BeginClose(new Point(12, corner.Y)), "Pressing the header elsewhere still moves the window");
             Assert(frame.BeginClose(corner) && !frame.CompleteClose(new Point(12, corner.Y)) && !closed, "Releasing away from the button cancels the close");
             Assert(frame.BeginClose(corner) && frame.CompleteClose(corner), "Clicking the button closes the window");
@@ -678,7 +695,8 @@ internal static class Program
         using var doc = new ImageDocument(White(400, 240)); doc.Add(Stroke(100));
         var window = new CaptureWindow(doc, new Int32Rect(200, 200, 400, 240)); window.Show();
         await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-        var view = ((Grid)((Border)window.Content).Child).Children.OfType<ImageViewport>().Single();
+        var frame = (CaptureFrame)window.Content;
+        var view = ((Grid)frame.Child).Children.OfType<ImageViewport>().Single();
         view.ActualSize();
         var hwnd = new WindowInteropHelper(window).Handle;
         foreach (var monitor in monitors)
@@ -687,6 +705,10 @@ internal static class Program
             await Task.Delay(80); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             double dpi = NativeMethods.GetDpiForWindow(hwnd) / 96d;
             Near(view.Zoom.DpiScale, dpi, "Moved window DPI"); Near(view.Zoom.ViewScale * dpi, 1, "Moved window physical 100%");
+            // A monitor with another scaling must not change how the frame looks.
+            double scaling = VisualTreeHelper.GetDpi(frame).DpiScaleX;
+            Near(frame.BorderThickness.Left * scaling, CaptureFrame.Thickness, "Moved window border pixels");
+            Near(frame.BandHeight * scaling, CaptureFrame.HeaderHeight, "Moved window band pixels");
             var p = new Point(130, 100); var back = view.Zoom.ToImage(view.Zoom.ToViewport(p)); Near(back.X, p.X, "Annotation inverse after move");
         }
         window.Close();
