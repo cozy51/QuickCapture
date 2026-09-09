@@ -67,7 +67,7 @@ public sealed class CaptureWindow : Window
         frame.MouseLeftButtonDown += (_, e) =>
         {
             var point = e.GetPosition(frame);
-            if (point.Y < CaptureFrame.HeaderHeight && !frame.IsOverCloseButton(point)) { e.Handled = true; DragMove(); }
+            if (point.Y < frame.BandHeight && !frame.IsOverCloseButton(point)) { e.Handled = true; DragMove(); }
         };
         grid.Children.Add(viewport);
         toolbar = new CaptureToolbar(DragMove, () => _ = CopyAsync(), viewport.ToggleHighlighter, Undo, viewport.ActualSize, viewport.Fit, Save, Close) { Visibility = Visibility.Collapsed };
@@ -177,9 +177,11 @@ public sealed class CaptureWindow : Window
         var work = NativeMethods.WorkArea(new Point(region.X, region.Y));
         NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, region.X, region.Y, 0, 0, 0x0001 | 0x0004 | 0x0010);
         double dpi = Math.Max(1, NativeMethods.GetDpiForWindow(hwnd) / 96d);
-        int width = Math.Min(work.Width, Math.Max((int)Math.Ceiling(MinWidth * dpi), Math.Min(region.Width + (int)Math.Ceiling(FrameThickness * 2 * dpi), work.Width - 32)));
-        int height = Math.Min(work.Height, Math.Max((int)Math.Ceiling(MinHeight * dpi), Math.Min(region.Height + (int)Math.Ceiling((FrameThickness * 2 + CaptureFrame.HeaderHeight) * dpi), work.Height - 32)));
-        int y = region.Y - (int)Math.Round(CaptureFrame.HeaderHeight * dpi);
+        // The frame itself is physical pixels, so only the minimum window size,
+        // which WPF keeps in layout units, still follows the monitor scaling.
+        int width = Math.Min(work.Width, Math.Max((int)Math.Ceiling(MinWidth * dpi), Math.Min(region.Width + (int)Math.Ceiling(FrameThickness * 2), work.Width - 32)));
+        int height = Math.Min(work.Height, Math.Max((int)Math.Ceiling(MinHeight * dpi), Math.Min(region.Height + (int)Math.Ceiling(FrameThickness * 2 + CaptureFrame.HeaderHeight), work.Height - 32)));
+        int y = region.Y - (int)Math.Round(CaptureFrame.HeaderHeight);
         NativeMethods.SetWindowPos(hwnd, Topmost ? new IntPtr(-1) : new IntPtr(-2), Math.Clamp(region.X, work.X, work.X + work.Width - width), Math.Clamp(y, work.Y, work.Y + work.Height - height), width, height, 0x0010);
     }
     private void ResizeForZoom(Point imageAnchor, Point screenAnchor)
@@ -201,8 +203,8 @@ public sealed class CaptureWindow : Window
         if (closed) return;
         var hwnd = new WindowInteropHelper(this).Handle;
         double dpi = viewport.Zoom.DpiScale;
-        double border = FrameThickness * dpi;
-        double header = CaptureFrame.HeaderHeight * dpi;
+        double border = FrameThickness;
+        double header = CaptureFrame.HeaderHeight;
         double imageWidth = document.Width * viewport.Zoom.Zoom;
         double imageHeight = document.Height * viewport.Zoom.Zoom;
         int width = (int)Math.Min(32767, Math.Max(Math.Ceiling(MinWidth * dpi), Math.Ceiling(imageWidth + 2 * border)));
