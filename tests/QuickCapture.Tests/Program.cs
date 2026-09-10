@@ -190,6 +190,12 @@ internal static class Program
                 window.Show(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 var view = ((Grid)((Border)window.Content).Child).Children.OfType<ImageViewport>().Single();
                 var hwnd = new WindowInteropHelper(window).Handle;
+                GetWindowRect(hwnd, out var opened);
+                // No black band around the picture: the window is the capture plus the
+                // frame in pixels, whatever scaling this monitor uses.
+                int frame = (int)CaptureFrame.Thickness * 2, band = (int)CaptureFrame.HeaderHeight;
+                Assert(opened.Pixels.Width == 400 + frame && opened.Pixels.Height == 240 + frame + band,
+                    $"Window hugs the capture in pixels: {opened.Pixels.Width} x {opened.Pixels.Height}");
                 GetWindowRect(hwnd, out var before);
                 var anchor = new Point(75, 65); var source = view.Zoom.ToImage(anchor); var screen = view.PointToScreen(anchor);
                 view.ZoomAt(120, anchor); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
