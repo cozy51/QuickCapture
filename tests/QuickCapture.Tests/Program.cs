@@ -623,7 +623,7 @@ internal static class Program
         var image = Clipboard.GetImage(); Assert(image != null && image.PixelWidth == 200 && image.PixelHeight == 100, "Clipboard bitmap roundtrip");
         Assert(Clipboard.ContainsData("PNG"), "PNG clipboard format"); passed++; Console.WriteLine("PASS Windows clipboard Bitmap + PNG");
     }
-    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out NativeMethods.RECT rect);
+    private static bool GetWindowRect(IntPtr window, out NativeMethods.RECT rect) => NativeMethods.GetWindowRect(window, out rect);
     private static async Task OverlayGeometry()
     {
         var monitors = NativeMethods.Monitors(); var bounds = PixelGeometry.Union(monitors);
@@ -703,6 +703,9 @@ internal static class Program
         {
             NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, monitor.X + 40, monitor.Y + 40, 600, 400, 0x0004 | 0x0010);
             await Task.Delay(80); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            // WPF answers the scaling change by growing the window; the pixel size must survive.
+            GetWindowRect(hwnd, out var moved);
+            Assert(moved.Pixels.Width == 600 && moved.Pixels.Height == 400, $"Monitor change keeps the window pixel size: {moved.Pixels.Width} x {moved.Pixels.Height}");
             double dpi = NativeMethods.GetDpiForWindow(hwnd) / 96d;
             Near(view.Zoom.DpiScale, dpi, "Moved window DPI"); Near(view.Zoom.ViewScale * dpi, 1, "Moved window physical 100%");
             // A monitor with another scaling must not change how the frame looks.

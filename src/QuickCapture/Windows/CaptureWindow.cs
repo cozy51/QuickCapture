@@ -19,6 +19,8 @@ namespace QuickCapture.Windows;
 public sealed class CaptureWindow : Window
 {
     internal const double FrameThickness = CaptureFrame.Thickness;
+    /// Smallest window, in physical pixels like the rest of the frame.
+    internal const double MinPixelWidth = 160, MinPixelHeight = 100 + CaptureFrame.HeaderHeight;
     private HwndSource? source;
     private readonly ImageDocument document;
     private readonly CaptureFrame frame;
@@ -41,6 +43,10 @@ public sealed class CaptureWindow : Window
     private bool copying, closed;
     private bool manualCopyRequested;
     private int zoomResizeRevision;
+    /// Physical size of the window, and the size WPF is about to force on it for a
+    /// monitor scaling change.
+    private int pixelWidth, pixelHeight;
+    private Int32Rect dpiSuggestion;
 
     public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Func<bool>? getNextAutoClose = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null)
     {
@@ -50,7 +56,7 @@ public sealed class CaptureWindow : Window
         this.setExportHeader = setExportHeader ?? (enabled => SetExportHeader(enabled));
         Title = $"QuickCapture · {document.Width} × {document.Height}";
         Icon = AppIcon.Image;
-        Topmost = this.settings.AlwaysOnTop; MinWidth = 160; MinHeight = 100 + CaptureFrame.HeaderHeight;
+        Topmost = this.settings.AlwaysOnTop; ApplyMinimumSize(1);
         Width = Math.Max(MinWidth, region.Width + FrameThickness * 2); Height = Math.Max(MinHeight, region.Height + FrameThickness * 2 + CaptureFrame.HeaderHeight);
         MaxWidth = 32767; MaxHeight = 32767;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResize;
@@ -158,6 +164,18 @@ public sealed class CaptureWindow : Window
         frame.InvalidateVisual();
         Title = $"QuickCapture · {number:00} / {count:00} · {CapturedAt.ToLocalTime():HH:mm:ss}";
     }
+    /// WPF keeps the minimum in layout units; hold it at the same pixel size so a
+    /// small capture is framed the same way on every monitor scaling.
+    private void ApplyMinimumSize(double scale)
+    {
+        double pixel = 1 / Math.Max(0.25, scale);
+        MinWidth = MinPixelWidth * pixel; MinHeight = MinPixelHeight * pixel;
+    }
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        ApplyMinimumSize(newDpi.DpiScaleX);
+    }
     private IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (message == 0x0024) // WM_GETMINMAXINFO: Windows defaults also cap oversized frames.
@@ -169,7 +187,38 @@ public sealed class CaptureWindow : Window
             Marshal.StructureToPtr(info, lParam, false);
             handled = true;
         }
+        else if (message == 0x0005 && wParam.ToInt64() != 1) RememberPixelSize(hwnd); // WM_SIZE, not minimized
+        else if (message == 0x02E0) UndoDpiResize(hwnd, Marshal.PtrToStructure<NativeMethods.RECT>(lParam).Pixels); // WM_DPICHANGED
         return IntPtr.Zero;
+    }
+    /// The pixel size the window is meant to keep. Every resize counts except the
+    /// one WPF applies for a monitor scaling change.
+    private void RememberPixelSize(IntPtr hwnd)
+    {
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+        var pixels = rect.Pixels;
+        if (pixels.Width == dpiSuggestion.Width && pixels.Height == dpiSuggestion.Height) return;
+        pixelWidth = pixels.Width; pixelHeight = pixels.Height;
+    }
+    /// WPF answers a monitor scaling change by resizing the window to the rectangle
+    /// Windows suggests, which keeps the layout size and so grows the window by the
+    /// scaling. The frame and the image are physical pixels, so the window has to
+    /// keep its pixel size instead: undo that one resize after WPF has applied it.
+    private void UndoDpiResize(IntPtr hwnd, Int32Rect suggested)
+    {
+        dpiSuggestion = suggested;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            dpiSuggestion = default;
+            if (closed || pixelWidth <= 0 || pixelHeight <= 0) return;
+            if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+            var pixels = rect.Pixels;
+            // Only WPF's rescale is undone; a size set after the change stays.
+            if (pixels.Width != suggested.Width || pixels.Height != suggested.Height) return;
+            if (pixels.Width == pixelWidth && pixels.Height == pixelHeight) return;
+            NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, pixelWidth, pixelHeight, 0x0002 | 0x0004 | 0x0010);
+            UpdateLayout(); viewport.Refresh();
+        });
     }
     private void PlaceAtCapture(Int32Rect region)
     {
@@ -177,8 +226,9 @@ public sealed class CaptureWindow : Window
         var work = NativeMethods.WorkArea(new Point(region.X, region.Y));
         NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, region.X, region.Y, 0, 0, 0x0001 | 0x0004 | 0x0010);
         double dpi = Math.Max(1, NativeMethods.GetDpiForWindow(hwnd) / 96d);
-        // The frame itself is physical pixels, so only the minimum window size,
-        // which WPF keeps in layout units, still follows the monitor scaling.
+        ApplyMinimumSize(dpi);
+        // The frame is physical pixels, and so is the minimum window size, so the
+        // capture is framed identically whatever scaling the monitor uses.
         int width = Math.Min(work.Width, Math.Max((int)Math.Ceiling(MinWidth * dpi), Math.Min(region.Width + (int)Math.Ceiling(FrameThickness * 2), work.Width - 32)));
         int height = Math.Min(work.Height, Math.Max((int)Math.Ceiling(MinHeight * dpi), Math.Min(region.Height + (int)Math.Ceiling(FrameThickness * 2 + CaptureFrame.HeaderHeight), work.Height - 32)));
         int y = region.Y - (int)Math.Round(CaptureFrame.HeaderHeight);
