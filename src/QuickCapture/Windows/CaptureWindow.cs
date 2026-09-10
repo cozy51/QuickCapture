@@ -47,6 +47,9 @@ public sealed class CaptureWindow : Window
     /// monitor scaling change.
     private int pixelWidth, pixelHeight;
     private Int32Rect dpiSuggestion;
+    /// The user dragged the frame to another size; the window stops hugging then.
+    private bool userSized;
+    private int sizingWidth;
 
     public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Func<bool>? getNextAutoClose = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null)
     {
@@ -86,6 +89,7 @@ public sealed class CaptureWindow : Window
         SetAutoClose(this.settings.AutoCloseCaptures);
         viewport.ViewChanged += ViewChanged;
         viewport.ZoomSizeChanged += ResizeForZoom;
+        SizeChanged += (_, _) => HugImage();
         ContextMenu = BuildContextMenu();
         PreviewMouseMove += (_, e) =>
         {
@@ -189,6 +193,10 @@ public sealed class CaptureWindow : Window
         }
         else if (message == 0x0005 && wParam.ToInt64() != 1) RememberPixelSize(hwnd); // WM_SIZE, not minimized
         else if (message == 0x02E0) UndoDpiResize(hwnd, Marshal.PtrToStructure<NativeMethods.RECT>(lParam).Pixels); // WM_DPICHANGED
+        // WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE: only a size the user dragged counts
+        // as their own, a move does not.
+        else if (message == 0x0231) sizingWidth = NativeMethods.GetWindowRect(hwnd, out var before) ? before.Pixels.Width : 0;
+        else if (message == 0x0232 && sizingWidth > 0 && NativeMethods.GetWindowRect(hwnd, out var after) && after.Pixels.Width != sizingWidth) userSized = true;
         return IntPtr.Zero;
     }
     /// The pixel size the window is meant to keep. Every resize counts except the
@@ -217,8 +225,48 @@ public sealed class CaptureWindow : Window
             if (pixels.Width != suggested.Width || pixels.Height != suggested.Height) return;
             if (pixels.Width == pixelWidth && pixels.Height == pixelHeight) return;
             NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, pixelWidth, pixelHeight, 0x0002 | 0x0004 | 0x0010);
-            UpdateLayout(); viewport.Refresh();
+            // The viewport repaints from its own SizeChanged; refreshing here would
+            // also pop the zoom status over a window the user has not touched.
+            UpdateLayout();
         });
+    }
+    /// The pixel size that shows the whole picture inside the frame.
+    private (int Width, int Height) PixelSizeForImage(double dpi)
+    {
+        double imageWidth = document.Width * viewport.Zoom.Zoom, imageHeight = document.Height * viewport.Zoom.Zoom;
+        int width = (int)Math.Min(32767, Math.Max(Math.Ceiling(MinWidth * dpi), Math.Ceiling(imageWidth + 2 * FrameThickness)));
+        int height = (int)Math.Min(32767, Math.Max(Math.Ceiling(MinHeight * dpi), Math.Ceiling(imageHeight + 2 * FrameThickness + CaptureFrame.HeaderHeight)));
+        return (width, height);
+    }
+    /// WPF owns Width and Height in layout units and re-applies them on its own
+    /// passes, which on a monitor at 125% turns a 400px capture into a 500px
+    /// window. Keep its numbers on the pixel size the window was just given.
+    private void SyncLayoutSize(int width, int height)
+    {
+        pixelWidth = width; pixelHeight = height;
+        // WPF's own scale, which is what it converts these numbers back with.
+        double scale = Math.Max(0.25, VisualTreeHelper.GetDpi(this).DpiScaleX);
+        double layoutWidth = width / scale, layoutHeight = height / scale;
+        if (Math.Abs(Width - layoutWidth) > 0.01) Width = layoutWidth;
+        if (Math.Abs(Height - layoutHeight) > 0.01) Height = layoutHeight;
+    }
+    /// Whatever leaves the window larger than its picture — WPF re-applying a
+    /// layout size taken on another scaling, or a monitor change — shows up as
+    /// black bands around the image. Trim that space away; the window is never
+    /// grown here, so zooming past the screen edges and a smaller size the user
+    /// chose are both left alone.
+    private void HugImage()
+    {
+        if (closed || userSized || viewport.Zoom.IsFit || viewport.ActualWidth <= 0) return;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+        double dpi = Math.Max(1, NativeMethods.GetDpiForWindow(hwnd) / 96d);
+        var wanted = PixelSizeForImage(dpi);
+        var pixels = rect.Pixels;
+        if (pixels.Width <= wanted.Width && pixels.Height <= wanted.Height) return;
+        int width = Math.Min(pixels.Width, wanted.Width), height = Math.Min(pixels.Height, wanted.Height);
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, width, height, 0x0002 | 0x0004 | 0x0010);
+        SyncLayoutSize(width, height);
     }
     private void PlaceAtCapture(Int32Rect region)
     {
@@ -233,6 +281,10 @@ public sealed class CaptureWindow : Window
         int height = Math.Min(work.Height, Math.Max((int)Math.Ceiling(MinHeight * dpi), Math.Min(region.Height + (int)Math.Ceiling(FrameThickness * 2 + CaptureFrame.HeaderHeight), work.Height - 32)));
         int y = region.Y - (int)Math.Round(CaptureFrame.HeaderHeight);
         NativeMethods.SetWindowPos(hwnd, Topmost ? new IntPtr(-1) : new IntPtr(-2), Math.Clamp(region.X, work.X, work.X + work.Width - width), Math.Clamp(y, work.Y, work.Y + work.Height - height), width, height, 0x0010);
+        // Width and Height still hold the layout size WPF created the window with,
+        // and WPF applies them again after this; without the sync the window grows
+        // back by the monitor scaling and leaves black bands around the picture.
+        SyncLayoutSize(width, height);
     }
     private void ResizeForZoom(Point imageAnchor, Point screenAnchor)
     {
@@ -257,8 +309,7 @@ public sealed class CaptureWindow : Window
         double header = CaptureFrame.HeaderHeight;
         double imageWidth = document.Width * viewport.Zoom.Zoom;
         double imageHeight = document.Height * viewport.Zoom.Zoom;
-        int width = (int)Math.Min(32767, Math.Max(Math.Ceiling(MinWidth * dpi), Math.Ceiling(imageWidth + 2 * border)));
-        int height = (int)Math.Min(32767, Math.Max(Math.Ceiling(MinHeight * dpi), Math.Ceiling(imageHeight + 2 * border + header)));
+        var (width, height) = PixelSizeForImage(dpi);
         double padX = Math.Max(0, (width - 2 * border - imageWidth) / 2);
         double padY = Math.Max(0, (height - 2 * border - header - imageHeight) / 2);
         int x = (int)Math.Round(screenAnchor.X - imageAnchor.X * viewport.Zoom.Zoom - border - padX);
@@ -266,6 +317,7 @@ public sealed class CaptureWindow : Window
         // Grow through the screen edges. Clamping the frame while restoring the
         // pointer anchor shifts the image down inside it and creates a black strip.
         NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, x, y, width, height, 0x0004 | 0x0010);
+        SyncLayoutSize(width, height);
         UpdateLayout();
         // SizeChanged/DPI may adjust the center. Restore the original screen anchor
         // only after the native position and WPF layout have both settled.
