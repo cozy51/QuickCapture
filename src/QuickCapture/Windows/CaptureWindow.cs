@@ -279,8 +279,12 @@ public sealed class CaptureWindow : Window
         // capture is framed identically whatever scaling the monitor uses.
         int width = Math.Min(work.Width, Math.Max((int)Math.Ceiling(MinWidth * dpi), Math.Min(region.Width + (int)Math.Ceiling(FrameThickness * 2), work.Width - 32)));
         int height = Math.Min(work.Height, Math.Max((int)Math.Ceiling(MinHeight * dpi), Math.Min(region.Height + (int)Math.Ceiling(FrameThickness * 2 + CaptureFrame.HeaderHeight), work.Height - 32)));
-        int y = region.Y - (int)Math.Round(CaptureFrame.HeaderHeight);
-        NativeMethods.SetWindowPos(hwnd, Topmost ? new IntPtr(-1) : new IntPtr(-2), Math.Clamp(region.X, work.X, work.X + work.Width - width), Math.Clamp(y, work.Y, work.Y + work.Height - height), width, height, 0x0010);
+        // The picture starts inside the band and the border, so the window sits that
+        // much up and to the left: what it shows then covers the very pixels it was
+        // taken from, instead of sitting a border's width down and to the right.
+        int x = region.X - (int)Math.Round(FrameThickness);
+        int y = region.Y - (int)Math.Round(CaptureFrame.HeaderHeight + FrameThickness);
+        NativeMethods.SetWindowPos(hwnd, Topmost ? new IntPtr(-1) : new IntPtr(-2), Math.Clamp(x, work.X, work.X + work.Width - width), Math.Clamp(y, work.Y, work.Y + work.Height - height), width, height, 0x0010);
         // Width and Height still hold the layout size WPF created the window with,
         // and WPF applies them again after this; without the sync the window grows
         // back by the monitor scaling and leaves black bands around the picture.
