@@ -196,11 +196,12 @@ internal static class Program
                 int frame = (int)CaptureFrame.Thickness * 2, band = (int)CaptureFrame.HeaderHeight;
                 Assert(opened.Pixels.Width == 400 + frame && opened.Pixels.Height == 240 + frame + band,
                     $"Window hugs the capture in pixels: {opened.Pixels.Width} x {opened.Pixels.Height}");
-                // The picture must land back on the pixels it was taken from.
+                // The picture must land back on the pixels it was taken from, measured
+                // where it is actually drawn rather than from the window frame.
                 var area = NativeMethods.WorkArea(new Point(monitor.X + 180, monitor.Y + 180));
-                int pictureX = opened.Pixels.X + (int)CaptureFrame.Thickness, pictureY = opened.Pixels.Y + band + (int)CaptureFrame.Thickness;
+                var shown = view.PointToScreen(view.Zoom.ToViewport(new Point()));
                 if (monitor.X + 180 - CaptureFrame.Thickness >= area.X && monitor.Y + 180 - band - CaptureFrame.Thickness >= area.Y)
-                    Assert(pictureX == monitor.X + 180 && pictureY == monitor.Y + 180, $"Picture covers the captured pixels: {pictureX}, {pictureY}");
+                    Assert(Math.Abs(shown.X - (monitor.X + 180)) < 1 && Math.Abs(shown.Y - (monitor.Y + 180)) < 1, $"Picture covers the captured pixels: {shown}");
                 GetWindowRect(hwnd, out var before);
                 var anchor = new Point(75, 65); var source = view.Zoom.ToImage(anchor); var screen = view.PointToScreen(anchor);
                 view.ZoomAt(120, anchor); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
@@ -283,6 +284,12 @@ internal static class Program
             var item = Mode(window); item.IsChecked = enabled;
             item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         }
+        void Retain(CaptureWindow window)
+        {
+            window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "この画像から自動終了をやめる")
+                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        }
         try
         {
             var original = Create(); var peer = Create();
@@ -297,9 +304,17 @@ internal static class Program
             SetMode(peer, false);
             var retained = Create();
             Assert(!retained.AutoCloseEnabled && next.AutoCloseEnabled && following.AutoCloseEnabled, "Turning off frees that image and future captures, not the armed ones");
+            // Keeping an image also stops the mode for the captures that follow.
+            SetMode(retained, true);
+            var stays = Create();
+            Assert(retained.AutoCloseEnabled && stays.AutoCloseEnabled && preferences.AutoCloseCaptures, "The mode is on again");
+            Retain(retained);
+            Assert(!retained.AutoCloseEnabled && !preferences.AutoCloseCaptures, "Keeping an image saves that for the captures that follow");
+            var kept = Create();
+            Assert(!kept.AutoCloseEnabled, "Captures taken after keeping an image stay on screen");
             await Task.Delay(3500);
-            Assert(!original.IsVisible && !next.IsVisible && !following.IsVisible, "The switched image and the temporary captures expire");
-            Assert(peer.IsVisible && retained.IsVisible, "Images left on the retained mode stay open");
+            Assert(!original.IsVisible && !next.IsVisible && !following.IsVisible && !stays.IsVisible, "The switched image and the temporary captures expire");
+            Assert(peer.IsVisible && retained.IsVisible && kept.IsVisible, "Images left on the retained mode stay open");
         }
         finally { foreach (var window in opened) window.Close(); }
         passed++; Console.WriteLine("PASS Context menu switches that image at once / shared mode / continuous captures / other images unchanged");
