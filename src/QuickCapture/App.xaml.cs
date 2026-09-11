@@ -40,7 +40,7 @@ public partial class App : Application
         capture.Failed += ex => Notify("キャプチャできませんでした: " + ex.Message);
         capture.Captured += (image, rect) =>
         {
-            var window = new CaptureWindow(new ImageDocument(image), rect, settings with { }, () => settings.AutoCloseCaptures, SetNextCapturesAutoClose, SetExportHeaderPreference);
+            var window = new CaptureWindow(new ImageDocument(image), rect, settings with { }, SetNextCapturesAutoClose, SetExportHeaderPreference);
             window.Show();
             _ = window.CopyInitialCaptureAsync();
         };
@@ -48,7 +48,7 @@ public partial class App : Application
         hotkey.Pressed += StartCapture;
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("範囲をキャプチャ", null, (_, _) => Dispatcher.BeginInvoke(StartCapture));
-        var autoCloseMode = new Forms.ToolStripMenuItem("次回以降のキャプチャを3秒で閉じる") { CheckOnClick = true, Checked = settings.AutoCloseCaptures };
+        var autoCloseMode = new Forms.ToolStripMenuItem("キャプチャを3秒で閉じる") { CheckOnClick = true, Checked = settings.AutoCloseCaptures };
         autoCloseMode.Click += (_, _) =>
         {
             try

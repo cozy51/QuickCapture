@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -29,7 +30,6 @@ public sealed class CaptureWindow : Window
     internal int CaptureCount => frame.CaptureCount;
     private readonly ImageViewport viewport;
     private readonly AppSettings settings;
-    private readonly Func<bool> getNextAutoClose;
     private readonly Action<bool> setNextAutoClose;
     private readonly Action<bool> setExportHeader;
     private readonly ImageExportService exporter = new();
@@ -38,7 +38,12 @@ public sealed class CaptureWindow : Window
     private readonly Border status;
     private readonly TextBlock statusText;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
-    private readonly DispatcherTimer autoCloseTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    /// Ticks while a capture is counting down, so the number on it keeps up.
+    private readonly DispatcherTimer autoCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
+    private const double AutoCloseSeconds = 3;
+    private DateTime autoCloseDeadline;
+    private readonly TextBlock countdownText;
+    private readonly Border countdown;
     public bool AutoCloseEnabled { get; private set; }
     private bool copying, closed;
     private bool manualCopyRequested;
@@ -51,10 +56,9 @@ public sealed class CaptureWindow : Window
     private bool userSized;
     private int sizingWidth;
 
-    public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Func<bool>? getNextAutoClose = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null)
+    public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null)
     {
         this.document = document; this.settings = settings ?? new();
-        this.getNextAutoClose = getNextAutoClose ?? (() => this.settings.AutoCloseCaptures);
         this.setNextAutoClose = setNextAutoClose ?? (enabled => this.settings.AutoCloseCaptures = enabled);
         this.setExportHeader = setExportHeader ?? (enabled => SetExportHeader(enabled));
         Title = $"QuickCapture · {document.Width} × {document.Height}";
@@ -84,6 +88,9 @@ public sealed class CaptureWindow : Window
         statusText = new TextBlock { Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap };
         status = new Border { Background = new SolidColorBrush(Color.FromArgb(220, 29, 33, 41)), CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Child = statusText, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         grid.Children.Add(status);
+        countdownText = new TextBlock { Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 96, TextAlignment = TextAlignment.Center };
+        countdown = new Border { Background = new SolidColorBrush(Color.FromArgb(170, 20, 22, 26)), CornerRadius = new CornerRadius(20), Padding = new Thickness(26, 0, 26, 10), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Child = countdownText, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+        grid.Children.Add(countdown);
         statusTimer.Tick += StatusExpired;
         autoCloseTimer.Tick += AutoCloseExpired;
         SetAutoClose(this.settings.AutoCloseCaptures);
@@ -105,7 +112,14 @@ public sealed class CaptureWindow : Window
         };
         PreviewKeyDown += HandleKey;
         PreviewKeyUp += (_, _) => viewport.UpdateCursor();
-        Loaded += (_, _) => { CaptureWindowRegistry.Register(this); if (AutoCloseEnabled) autoCloseTimer.Start(); };
+        Loaded += (_, _) =>
+        {
+            CaptureWindowRegistry.Register(this);
+            if (AutoCloseEnabled) StartAutoClose();
+            // Once everything has been laid out, put the picture on the very pixels
+            // it came from, measured rather than assumed.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () => AlignToCapture(region));
+        };
         IsVisibleChanged += (_, _) => CaptureWindowRegistry.Refresh();
         StateChanged += (_, _) => CaptureWindowRegistry.Refresh();
         Deactivated += (_, _) => { viewport.CancelInteraction(); toolbar.Visibility = Visibility.Collapsed; frame.CancelPointer(); };
@@ -127,8 +141,24 @@ public sealed class CaptureWindow : Window
         AutoCloseEnabled = enabled;
         frame.AutoClose = enabled;
         frame.InvalidateVisual();
-        if (enabled && IsLoaded) autoCloseTimer.Start();
+        if (enabled && IsLoaded) StartAutoClose(); else countdown.Visibility = Visibility.Collapsed;
     }
+    /// The three seconds start now, counted down by the big number on the image.
+    private void StartAutoClose()
+    {
+        autoCloseDeadline = DateTime.UtcNow.AddSeconds(AutoCloseSeconds);
+        ShowCountdown(AutoCloseSeconds);
+        autoCloseTimer.Start();
+    }
+    private void ShowCountdown(double remaining)
+    {
+        countdownText.Text = Math.Max(1, Math.Ceiling(remaining)).ToString("0", CultureInfo.InvariantCulture);
+        // Large enough to read at a glance, never wider than the picture itself.
+        countdownText.FontSize = Math.Max(28, Math.Min(120, Math.Min(viewport.ActualWidth, viewport.ActualHeight) / 2));
+        countdown.Visibility = Visibility.Visible;
+    }
+    /// The seconds left on this capture while it counts down, for tests.
+    internal string? Countdown => countdown.Visibility == Visibility.Visible ? countdownText.Text : null;
     internal void SetExportBorder(bool enabled) => settings.ExportBorderEnabled = enabled;
     internal void SetExportHeader(bool enabled)
     {
@@ -147,18 +177,21 @@ public sealed class CaptureWindow : Window
     /// The header of this window as copy and save should record it, or null while
     /// the export is the image alone.
     private CaptureHeaderInfo? ExportHeader => settings.ExportHeaderEnabled ? frame.Header : null;
+    /// Switching the mode takes effect on this image at once and stays on for the
+    /// captures that follow. Images already open keep the mode they were given.
     private void SetNextCapturesAutoClose(bool enabled)
     {
-        try
-        {
-            setNextAutoClose(enabled);
-            ShowStatus(enabled ? "次回以降のキャプチャは3秒で閉じます" : "次回以降のキャプチャは画面に残します");
-        }
-        catch (Exception ex) { ShowStatus("設定を保存できません: " + ex.Message); }
+        try { setNextAutoClose(enabled); }
+        catch (Exception ex) { SetAutoClose(enabled); ShowStatus("設定を保存できません: " + ex.Message); return; }
+        SetAutoClose(enabled);
+        ShowStatus(enabled ? "この画像から3秒で閉じます" : "この画像から画面に残します");
     }
     private void AutoCloseExpired(object? sender, EventArgs e)
     {
+        double remaining = (autoCloseDeadline - DateTime.UtcNow).TotalSeconds;
+        if (remaining > 0) { ShowCountdown(remaining); return; }
         autoCloseTimer.Stop();
+        countdown.Visibility = Visibility.Collapsed;
         if (AutoCloseEnabled && !closed) Close();
     }
     internal void UpdateSequence(int number, int count)
@@ -268,6 +301,23 @@ public sealed class CaptureWindow : Window
         NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, width, height, 0x0002 | 0x0004 | 0x0010);
         SyncLayoutSize(width, height);
     }
+    /// Where the first pixel of the picture actually landed decides the position:
+    /// the band, the border and anything Windows puts around the window are all
+    /// accounted for by measuring instead of adding them up. Only small errors are
+    /// corrected, so a window held inside the work area stays where it was put.
+    private void AlignToCapture(Int32Rect region)
+    {
+        if (closed || !viewport.IsLoaded || viewport.ActualWidth <= 0 || viewport.Zoom.Zoom != 1) return;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+        var shown = viewport.PointToScreen(viewport.Zoom.ToViewport(new Point(0, 0)));
+        int dx = region.X - (int)Math.Round(shown.X), dy = region.Y - (int)Math.Round(shown.Y);
+        if (Math.Abs(dx) > 8) dx = 0;
+        if (Math.Abs(dy) > 8) dy = 0;
+        if (dx == 0 && dy == 0) return;
+        var pixels = rect.Pixels;
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, pixels.X + dx, pixels.Y + dy, 0, 0, 0x0001 | 0x0004 | 0x0010);
+    }
     private void PlaceAtCapture(Int32Rect region)
     {
         var hwnd = new WindowInteropHelper(this).Handle;
@@ -353,7 +403,7 @@ public sealed class CaptureWindow : Window
             {
                 case Key.Delete: Close(); break;
                 case Key.H: if (!e.IsRepeat) viewport.ToggleHighlighter(); break;
-                case Key.T: if (!e.IsRepeat) SetNextCapturesAutoClose(!getNextAutoClose()); break;
+                case Key.T: if (!e.IsRepeat) SetNextCapturesAutoClose(!AutoCloseEnabled); break;
                 case Key.F: viewport.CancelInteraction(); viewport.Fit(); break;
                 case Key.D1: case Key.NumPad1: viewport.CancelInteraction(); viewport.ActualSize(); break;
                 case Key.OemOpenBrackets: viewport.ChangeWidth(-1); break;
@@ -393,8 +443,8 @@ public sealed class CaptureWindow : Window
             item.Click += (_, _) => action(); menu.Items.Add(item);
         }
         Add("閉じる", "Delete", Close);
-        var autoClose = new MenuItem { Header = "次回以降のキャプチャを3秒で閉じる", InputGestureText = "T", IsCheckable = true };
-        autoClose.Click += (_, _) => { SetNextCapturesAutoClose(autoClose.IsChecked); autoClose.IsChecked = getNextAutoClose(); }; menu.Items.Add(autoClose);
+        var autoClose = new MenuItem { Header = "この画像から3秒で閉じる", InputGestureText = "T", IsCheckable = true };
+        autoClose.Click += (_, _) => { SetNextCapturesAutoClose(autoClose.IsChecked); autoClose.IsChecked = AutoCloseEnabled; }; menu.Items.Add(autoClose);
         var retain = new MenuItem { Header = "この画像を残す（自動終了を解除）" };
         retain.Click += (_, _) => SetAutoClose(false); menu.Items.Add(retain);
         menu.Items.Add(new Separator());
@@ -427,7 +477,7 @@ public sealed class CaptureWindow : Window
         menu.Opened += (_, _) =>
         {
             viewport.CancelInteraction(); toggle.IsChecked = viewport.IsHighlighting; topmost.IsChecked = Topmost;
-            autoClose.IsChecked = getNextAutoClose(); retain.Visibility = AutoCloseEnabled ? Visibility.Visible : Visibility.Collapsed;
+            autoClose.IsChecked = AutoCloseEnabled; retain.Visibility = AutoCloseEnabled ? Visibility.Visible : Visibility.Collapsed;
             exportHeader.IsChecked = settings.ExportHeaderEnabled;
         };
         return menu;
@@ -473,6 +523,6 @@ public sealed class CaptureWindow : Window
             exporter.SavePng(document, dialog.FileName, settings.ExportBorderEnabled, ExportHeader); ShowStatus("保存しました");
         }
         catch (Exception ex) { ShowStatus("保存できません: " + ex.Message); }
-        finally { if (!closed && AutoCloseEnabled) autoCloseTimer.Start(); }
+        finally { if (!closed && AutoCloseEnabled) StartAutoClose(); }
     }
 }

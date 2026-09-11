@@ -162,8 +162,10 @@ internal sealed class CaptureFrame : Border
         dc.DrawRectangle(CaptureHeader.BandBrush(RecordHeader), null, new Rect(0, 0, width, HeaderHeight));
         CaptureHeader.Render(dc, width, 1, Header, CloseButtonWidth, AutoClose ? "3秒で閉じる" : null, TemporaryOutline.Brush);
         RenderCloseButton(dc, DeviceCloseButton(width));
-        double inset = Thickness / 2;
-        dc.DrawRectangle(null, AutoClose ? TemporaryOutline : Outline, new Rect(inset, HeaderHeight + inset, Math.Max(0, width - Thickness), Math.Max(0, height - HeaderHeight - Thickness)));
+        // The dashes enclose the band as well while it is part of the copy, so the
+        // outline shows exactly what copy and save record.
+        double inset = Thickness / 2, top = RecordHeader ? 0 : HeaderHeight;
+        dc.DrawRectangle(null, AutoClose ? TemporaryOutline : Outline, new Rect(inset, top + inset, Math.Max(0, width - Thickness), Math.Max(0, height - top - Thickness)));
         dc.Pop();
     }
     private void RenderCloseButton(DrawingContext dc, Rect bounds)
