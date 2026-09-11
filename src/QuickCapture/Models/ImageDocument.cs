@@ -15,6 +15,13 @@ public sealed class ImageDocument(BitmapSource image, DateTimeOffset? capturedAt
     public UndoRedoManager History { get; } = new();
     public event Action? Changed;
     public void Add(IAnnotation annotation) { History.Execute(new AddAction(annotations, annotation)); Changed?.Invoke(); }
+    /// Moving or recolouring a label puts an equal one in its place, as one step.
+    public void Replace(IAnnotation existing, IAnnotation replacement)
+    {
+        int index = annotations.IndexOf(existing);
+        if (index < 0) return;
+        History.Execute(new ReplaceAction(annotations, index, existing, replacement)); Changed?.Invoke();
+    }
     public void Clear() { if (annotations.Count == 0) return; History.Execute(new ClearAction(annotations)); Changed?.Invoke(); }
     public void Undo() { History.Undo(); Changed?.Invoke(); }
     public void Redo() { History.Redo(); Changed?.Invoke(); }
@@ -23,6 +30,11 @@ public sealed class ImageDocument(BitmapSource image, DateTimeOffset? capturedAt
     {
         public void Execute() => target.Add(annotation);
         public void Undo() => target.RemoveAt(target.Count - 1);
+    }
+    private sealed class ReplaceAction(List<IAnnotation> target, int index, IAnnotation from, IAnnotation to) : IUndoableAction
+    {
+        public void Execute() => target[index] = to;
+        public void Undo() => target[index] = from;
     }
     private sealed class ClearAction(List<IAnnotation> target) : IUndoableAction
     {

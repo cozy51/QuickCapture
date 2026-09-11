@@ -43,6 +43,7 @@ internal static class Program
                 Run("Embedded multi-resolution application and tray icons", Icons);
                 Run("Undo / redo / clear / branching / history limit", History);
                 Run("Highlighter source pixels / opacity / PNG", Rendering);
+                Run("Plain pen writes opaque / labels measure, move and undo", DrawingTools);
                 Run("Export border / intact edge pixels / annotations / PNG / opt-out", ExportBorder);
                 Run("Header record / band above the capture / close button excluded", ExportHeader);
                 Run("Axis correction / preserves curves / corrected Undo and export", Straightening);
@@ -55,6 +56,7 @@ internal static class Program
                 await RecordHeaderMode(args.Contains("--integration"));
                 await AutoCloseWindows();
                 await NextCaptureMode();
+                await DrawingPreferences();
                 await ZoomWindowSizing();
                 await CaptureModeAppearance();
                 if (args.Contains("--integration"))
@@ -178,6 +180,37 @@ internal static class Program
         }
         finally { first.Close(); second.Close(); third.Close(); }
         passed++; Console.WriteLine("PASS Capture numbering / hide, minimize, restore, close / fixed timestamp / metadata excluded from export");
+    }
+    /// The colour a tool is given is the colour the next captures start with, so
+    /// the choice has to reach the settings, not just this image.
+    private static async Task DrawingPreferences()
+    {
+        AppSettings? saved = null;
+        using var doc = new ImageDocument(White(200, 100));
+        var window = new CaptureWindow(doc, new Int32Rect(200, 200, 200, 100), new AppSettings(), null, null, next => saved = next with { });
+        try
+        {
+            window.Show(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            var view = ((Grid)((CaptureFrame)window.Content).Child).Children.OfType<ImageViewport>().Single();
+            Assert(AppSettings.DefaultTextColor == "#2F7BF6" && view.TextColor == DrawingPalette.Parse(AppSettings.DefaultTextColor), "Labels are written in blue");
+            Assert(view.Pen.Color == DrawingPalette.Parse(AppSettings.DefaultPenColor), "The plain pen writes in blue");
+            view.ToggleText();
+            MenuItem Colour(string name)
+            {
+                window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+                var tools = window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "描画ツール");
+                return tools.Items.OfType<MenuItem>().Single(item => (item.Header as string) == name);
+            }
+            Colour("赤").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Assert(view.TextColor == DrawingPalette.Parse("#FF5555") && view.Tool == DrawingTool.Text, "The label colour follows the palette");
+            Assert(saved != null && saved.TextColor == "#FF5555", $"The label colour is kept for the next captures: {saved?.TextColor}");
+            view.TogglePen();
+            Colour("緑").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Assert(view.Pen.Color == DrawingPalette.Parse("#68E675") && view.TextColor == DrawingPalette.Parse("#FF5555"), "Each tool keeps its own colour");
+            Assert(saved != null && saved.PenColor == "#68E675" && saved.TextColor == "#FF5555", "Both colours reach the settings");
+        }
+        finally { window.Close(); }
+        passed++; Console.WriteLine("PASS Blue labels and pen / palette per tool / colours saved for the next captures");
     }
     private static async Task ZoomWindowSizing()
     {
@@ -402,6 +435,34 @@ internal static class Program
         var tool = new HighlighterTool(); tool.Begin(new Point(1, 1)); tool.Add(new Point(10, 10), 0.1); Assert(tool.Finish() != null && !tool.IsDrawing, "Stroke commits");
         tool.Begin(new Point(2, 2)); tool.Cancel(); Assert(tool.Preview == null, "Draft cancel");
     }
+    /// The plain pen leaves an opaque line, and a label knows its own bounds so it
+    /// can be picked up, moved and undone as one step.
+    private static void DrawingTools()
+    {
+        var blue = DrawingPalette.Parse(AppSettings.DefaultPenColor);
+        Assert(new AppSettings().PenColor == "#2F7BF6" && new AppSettings().TextColor == AppSettings.DefaultTextColor, "The plain pen writes in blue");
+        var pen = new HighlighterTool { Opaque = true, Width = 6, Color = blue };
+        pen.Begin(new Point(20, 50)); pen.Add(new Point(120, 50), 0.1);
+        using var doc = new ImageDocument(White(200, 100));
+        doc.Add(pen.Finish()!);
+        var image = new ImageExportService().Compose(doc);
+        var pixel = new byte[4]; image.CopyPixels(new Int32Rect(70, 50, 1, 1), pixel, 4, 0);
+        Assert(pixel[0] == blue.B && pixel[1] == blue.G && pixel[2] == blue.R, $"The pen line is opaque: {pixel[2]}, {pixel[1]}, {pixel[0]}");
+        image.CopyPixels(new Int32Rect(70, 90, 1, 1), pixel, 4, 0); Assert(pixel[0] == 255, "Outside the line untouched");
+
+        var label = new TextAnnotation("あア亜A", new Point(10, 10), Colors.Red, 24);
+        Assert(label.Size.Width > 10 && label.Size.Height > 10, "A label measures itself");
+        Assert(label.Contains(new Point(12, 12)) && !label.Contains(new Point(8, 8)), "A label is picked up where it is drawn");
+        doc.Add(label);
+        var moved = label.Moved(new Vector(40, 20));
+        Assert(moved.Origin == new Point(50, 30) && moved.Text == label.Text && moved.Color == label.Color, "Moving keeps the text and the colour");
+        doc.Replace(label, moved);
+        Assert(doc.Annotations.Contains(moved) && !doc.Annotations.Contains(label), "The label moved");
+        doc.Undo(); Assert(doc.Annotations.Contains(label) && !doc.Annotations.Contains(moved), "The move undoes as one step");
+        doc.Redo(); Assert(doc.Annotations.Contains(moved), "The move redoes");
+        Assert(moved.Recoloured(Colors.Blue) is { Color.B: 255 } recoloured && recoloured.Origin == moved.Origin, "Recolouring keeps the place");
+        Assert(DrawingPalette.Colors.Length == 7 && DrawingPalette.Colors[0].Hex == AppSettings.DefaultPenColor, "The palette leads with the pen blue");
+    }
     private static void ExportBorder()
     {
         using var doc = new ImageDocument(White());
@@ -604,9 +665,11 @@ internal static class Program
     private static void Settings()
     {
         string path = Path.Combine(root, "artifacts", "test-settings.json"); var service = new SettingsService(path);
-        var settings = new AppSettings { GlobalShortcut = "Ctrl+Alt+Q", HighlighterWidth = 34, CloseAfterCopy = true, AutoCloseCaptures = true, ExportBorderEnabled = false, ExportHeaderEnabled = true };
+        var settings = new AppSettings { GlobalShortcut = "Ctrl+Alt+Q", HighlighterWidth = 34, CloseAfterCopy = true, AutoCloseCaptures = true, ExportBorderEnabled = false, ExportHeaderEnabled = true, PenColor = "#123456", PenWidth = 7, TextColor = "#ABCDEF", TextSize = 30 };
         service.Save(settings); Assert(service.Load() == settings, "Settings roundtrip");
+        Assert(service.Load().PenColor == "#123456" && service.Load().TextSize == 30, "The pen and label choices are kept for the next run");
         File.WriteAllText(path, "{}"); Assert(!service.Load().AutoCloseCaptures, "Older settings default to retaining captures");
+        Assert(service.Load().PenColor == AppSettings.DefaultPenColor && service.Load().TextColor == AppSettings.DefaultTextColor, "Older settings get the new pen and label colours");
         Assert(service.Load().ExportBorderEnabled && !service.Load().ExportHeaderEnabled, "Older settings enable the export border and record no header band");
         File.WriteAllText(path, "{bad"); Assert(service.Load().GlobalShortcut == "Ctrl+Shift+R" && service.LoadWarning != null, "Corrupt JSON fallback");
         bool invalid = false; try { AppSettings.ParseShortcut("R"); } catch (ArgumentException) { invalid = true; } Assert(invalid, "Unmodified key rejected");
