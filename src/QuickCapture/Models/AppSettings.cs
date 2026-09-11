@@ -7,10 +7,17 @@ namespace QuickCapture.Models;
 public sealed record AppSettings
 {
     public const string DefaultHighlighterColor = "#68E675";
+    public const string DefaultPenColor = "#2F7BF6";
+    public const string DefaultTextColor = "#E5484D";
     public string GlobalShortcut { get; set; } = "Ctrl+Shift+R";
     public string HighlighterColor { get; set; } = DefaultHighlighterColor;
     public double HighlighterWidth { get; set; } = 20;
     public double HighlighterOpacity { get; set; } = 0.45;
+    /// The plain pen writes in blue, the labels in red, both kept between runs.
+    public string PenColor { get; set; } = DefaultPenColor;
+    public double PenWidth { get; set; } = 4;
+    public string TextColor { get; set; } = DefaultTextColor;
+    public double TextSize { get; set; } = 24;
     public bool AlwaysOnTop { get; set; } = true;
     public bool CopyIncludesAnnotations { get; set; } = true;
     public bool CloseAfterCopy { get; set; }
@@ -25,7 +32,18 @@ public sealed record AppSettings
         catch { throw new ArgumentException("蛍光ペン色が正しくありません。"); }
         if (!double.IsFinite(HighlighterWidth) || HighlighterWidth < 2 || HighlighterWidth > 200) throw new ArgumentException("線幅は2〜200pxで指定してください。");
         if (!double.IsFinite(HighlighterOpacity) || HighlighterOpacity < 0.1 || HighlighterOpacity > 0.8) throw new ArgumentException("透明度は0.1〜0.8で指定してください。");
+        if (!IsColor(PenColor)) throw new ArgumentException("ペンの色が正しくありません。");
+        if (!IsColor(TextColor)) throw new ArgumentException("文字の色が正しくありません。");
+        if (!double.IsFinite(PenWidth) || PenWidth < 1 || PenWidth > 100) throw new ArgumentException("ペンの線幅は1〜100pxで指定してください。");
+        if (!double.IsFinite(TextSize) || TextSize < 8 || TextSize > 200) throw new ArgumentException("文字の大きさは8〜200pxで指定してください。");
     }
+    private static bool IsColor(string value)
+    {
+        try { return !string.IsNullOrWhiteSpace(value) && ColorConverter.ConvertFromString(value) is Color; }
+        catch { return false; }
+    }
+    /// The form colours are written back in, as the palette spells them.
+    public static string ToHex(Color color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
     public static (ModifierKeys Modifiers, Key Key) ParseShortcut(string value)
     {
         ModifierKeys modifiers = ModifierKeys.None; Key key = Key.None;

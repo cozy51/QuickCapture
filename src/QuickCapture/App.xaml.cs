@@ -40,7 +40,7 @@ public partial class App : Application
         capture.Failed += ex => Notify("キャプチャできませんでした: " + ex.Message);
         capture.Captured += (image, rect) =>
         {
-            var window = new CaptureWindow(new ImageDocument(image), rect, settings with { }, SetNextCapturesAutoClose, SetExportHeaderPreference);
+            var window = new CaptureWindow(new ImageDocument(image), rect, settings with { }, SetNextCapturesAutoClose, SetExportHeaderPreference, SaveDrawingPreferences);
             window.Show();
             _ = window.CopyInitialCaptureAsync();
         };
@@ -76,6 +76,17 @@ public partial class App : Application
     private void SetNextCapturesAutoClose(bool enabled)
     {
         var next = settings with { AutoCloseCaptures = enabled };
+        settingsService.Save(next); settings = next;
+    }
+    /// A colour or width picked on any image becomes the default for the next ones.
+    private void SaveDrawingPreferences(AppSettings from)
+    {
+        var next = settings with
+        {
+            HighlighterColor = from.HighlighterColor, HighlighterWidth = from.HighlighterWidth,
+            PenColor = from.PenColor, PenWidth = from.PenWidth,
+            TextColor = from.TextColor, TextSize = from.TextSize
+        };
         settingsService.Save(next); settings = next;
     }
     /// Right-click switching on any image: save it and apply it to every open one.

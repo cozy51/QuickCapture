@@ -32,9 +32,13 @@ public sealed class CaptureWindow : Window
     private readonly AppSettings settings;
     private readonly Action<bool> setNextAutoClose;
     private readonly Action<bool> setExportHeader;
+    /// Colour and width choices are kept for the captures that follow.
+    private readonly Action<AppSettings> saveDrawing;
     private readonly ImageExportService exporter = new();
     private readonly ClipboardService clipboard = new();
     private readonly CaptureToolbar toolbar;
+    private readonly TextBox textEditor;
+    private Point textOrigin;
     private readonly Border status;
     private readonly TextBlock statusText;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -60,11 +64,12 @@ public sealed class CaptureWindow : Window
     private readonly Int32Rect capturedRegion;
     private bool keepAtCapture = true;
 
-    public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null)
+    public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null, Action<AppSettings>? saveDrawing = null)
     {
         this.document = document; this.settings = settings ?? new(); capturedRegion = region;
         this.setNextAutoClose = setNextAutoClose ?? (enabled => this.settings.AutoCloseCaptures = enabled);
         this.setExportHeader = setExportHeader ?? (enabled => SetExportHeader(enabled));
+        this.saveDrawing = saveDrawing ?? (_ => { });
         Title = $"QuickCapture · {document.Width} × {document.Height}";
         Icon = AppIcon.Image;
         Topmost = this.settings.AlwaysOnTop; ApplyMinimumSize(1);
@@ -74,9 +79,14 @@ public sealed class CaptureWindow : Window
         Background = new SolidColorBrush(Color.FromRgb(24, 27, 32));
         WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight = 0, ResizeBorderThickness = new Thickness(6), GlassFrameThickness = new Thickness(0), CornerRadius = new CornerRadius(0), UseAeroCaptionButtons = false });
         viewport = new ImageViewport(document);
-        viewport.Highlighter.Color = (Color)ColorConverter.ConvertFromString(this.settings.HighlighterColor);
+        viewport.Highlighter.Color = DrawingPalette.Parse(this.settings.HighlighterColor);
         viewport.Highlighter.Width = this.settings.HighlighterWidth;
         viewport.Highlighter.Opacity = this.settings.HighlighterOpacity;
+        viewport.Pen.Color = DrawingPalette.Parse(this.settings.PenColor);
+        viewport.Pen.Width = this.settings.PenWidth;
+        viewport.TextColor = DrawingPalette.Parse(this.settings.TextColor);
+        viewport.TextSize = this.settings.TextSize;
+        viewport.TextRequested += StartTextEdit;
         var grid = new Grid { ClipToBounds = true };
         frame = new CaptureFrame { Child = grid, CapturedAt = document.CapturedAt, RecordHeader = this.settings.ExportHeaderEnabled };
         Content = frame;
@@ -87,8 +97,21 @@ public sealed class CaptureWindow : Window
             if (point.Y < frame.BandHeight && !frame.IsOverCloseButton(point)) { e.Handled = true; DragMove(); }
         };
         grid.Children.Add(viewport);
-        toolbar = new CaptureToolbar(DragMove, () => _ = CopyAsync(), viewport.ToggleHighlighter, Undo, viewport.ActualSize, viewport.Fit, Save, Close) { Visibility = Visibility.Collapsed };
+        toolbar = new CaptureToolbar(DragMove, () => _ = CopyAsync(), viewport.ToggleHighlighter, viewport.TogglePen, viewport.ToggleText,
+            Undo, viewport.ActualSize, viewport.Fit, Save, Close, PickColor) { Visibility = Visibility.Collapsed };
         grid.Children.Add(toolbar);
+        // Labels are typed in a real text box so the IME works; it sits over the
+        // picture at the spot that was clicked and leaves a TextAnnotation behind.
+        textEditor = new TextBox
+        {
+            Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            MinWidth = 40, MaxWidth = 640, BorderThickness = new Thickness(1), Padding = new Thickness(0), AcceptsReturn = true,
+            Background = new SolidColorBrush(Color.FromArgb(235, 255, 255, 255)), BorderBrush = new SolidColorBrush(Color.FromRgb(120, 130, 145)),
+            FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.NoWrap
+        };
+        textEditor.PreviewKeyDown += TextEditorKey;
+        textEditor.LostKeyboardFocus += (_, _) => CommitText();
+        grid.Children.Add(textEditor);
         statusText = new TextBlock { Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap };
         status = new Border { Background = new SolidColorBrush(Color.FromArgb(220, 29, 33, 41)), CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Child = statusText, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         grid.Children.Add(status);
@@ -391,6 +414,8 @@ public sealed class CaptureWindow : Window
     }
     private void HandleKey(object sender, KeyEventArgs e)
     {
+        // While a label is being typed the keys belong to the text box.
+        if (textEditor.IsKeyboardFocusWithin) return;
         viewport.UpdateCursor();
         var modifiers = Keyboard.Modifiers;
         if (e.Key == Key.Escape) viewport.CancelMode();
@@ -414,25 +439,87 @@ public sealed class CaptureWindow : Window
             {
                 case Key.Delete: Close(); break;
                 case Key.H: if (!e.IsRepeat) viewport.ToggleHighlighter(); break;
+                case Key.P: if (!e.IsRepeat) viewport.TogglePen(); break;
+                case Key.X: if (!e.IsRepeat) viewport.ToggleText(); break;
                 case Key.T: if (!e.IsRepeat) SetNextCapturesAutoClose(!AutoCloseEnabled); break;
                 case Key.F: viewport.CancelInteraction(); viewport.Fit(); break;
                 case Key.D1: case Key.NumPad1: viewport.CancelInteraction(); viewport.ActualSize(); break;
-                case Key.OemOpenBrackets: viewport.ChangeWidth(-1); break;
-                case Key.OemCloseBrackets: viewport.ChangeWidth(1); break;
+                case Key.OemOpenBrackets: ChangeWidth(-1); break;
+                case Key.OemCloseBrackets: ChangeWidth(1); break;
                 default: return;
             }
         }
         else return;
         e.Handled = true;
     }
+    /// A colour from the toolbar or the menu applies to the tool in hand and is
+    /// kept for the captures that follow.
+    private void PickColor(Color color)
+    {
+        viewport.SetColor(color);
+        if (textEditor.Visibility == Visibility.Visible) textEditor.Foreground = new SolidColorBrush(viewport.TextColor);
+        SaveDrawing();
+    }
+    private void ChangeWidth(int direction) { viewport.ChangeWidth(direction); SaveDrawing(); }
+    private void SaveDrawing()
+    {
+        settings.HighlighterColor = AppSettings.ToHex(viewport.Highlighter.Color);
+        settings.HighlighterWidth = viewport.Highlighter.Width;
+        settings.PenColor = AppSettings.ToHex(viewport.Pen.Color);
+        settings.PenWidth = viewport.Pen.Width;
+        settings.TextColor = AppSettings.ToHex(viewport.TextColor);
+        settings.TextSize = viewport.TextSize;
+        try { saveDrawing(settings); }
+        catch (Exception ex) { ShowStatus("設定を保存できません: " + ex.Message); }
+    }
+    /// The label tool was clicked on the picture: open the editor right there.
+    private void StartTextEdit(Point origin)
+    {
+        if (closed) return;
+        CommitText();
+        textOrigin = origin;
+        var at = viewport.Zoom.ToViewport(origin);
+        textEditor.Margin = new Thickness(Math.Max(0, at.X - 2), Math.Max(0, at.Y - 2), 0, 0);
+        textEditor.FontSize = Math.Max(8, viewport.TextSize * viewport.Zoom.ViewScale);
+        textEditor.Foreground = new SolidColorBrush(viewport.TextColor);
+        textEditor.Text = string.Empty;
+        textEditor.Visibility = Visibility.Visible;
+        textEditor.Focus(); Keyboard.Focus(textEditor);
+        ShowStatus("文字を入力 · Enterで確定 · Shift+Enterで改行 · Escで取り消し");
+    }
+    private void TextEditorKey(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
+        else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0) { e.Handled = true; CommitText(); }
+    }
+    private void CommitText()
+    {
+        if (textEditor.Visibility != Visibility.Visible) return;
+        string text = textEditor.Text;
+        textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty;
+        viewport.AddText(textOrigin, text);
+        viewport.Focus();
+    }
+    private void CancelText()
+    {
+        if (textEditor.Visibility != Visibility.Visible) return;
+        textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty;
+        viewport.Focus();
+    }
     private void Undo() { viewport.CancelInteraction(); document.Undo(); }
     private void Clear() { viewport.CancelInteraction(); document.Clear(); }
     private void ViewChanged()
     {
-        toolbar.Update(viewport.IsHighlighting || viewport.Highlighter.IsDrawing, document.History.CanUndo, viewport.Highlighter.Color);
+        toolbar.Update(viewport.Tool, document.History.CanUndo, viewport.ToolColor);
         ShowStatus(ViewStatus());
     }
-    private string ViewStatus() => $"{viewport.Zoom.Zoom:P0}" + (viewport.IsHighlighting ? $"  ·  蛍光ペン {viewport.Highlighter.Width:0}px  ·  Alt / Spaceでパン" : "");
+    private string ViewStatus() => $"{viewport.Zoom.Zoom:P0}" + viewport.Tool switch
+    {
+        DrawingTool.Highlighter => $"  ·  蛍光ペン {viewport.Highlighter.Width:0}px  ·  Alt / Spaceでパン",
+        DrawingTool.Pen => $"  ·  ペン {viewport.Pen.Width:0}px  ·  Alt / Spaceでパン",
+        DrawingTool.Text => "  ·  テキスト · クリックで入力、文字をドラッグで移動",
+        _ => ""
+    };
     private void ShowStatus(string text)
     {
         if (closed) return;
@@ -442,7 +529,7 @@ public sealed class CaptureWindow : Window
     private void StatusExpired(object? sender, EventArgs e)
     {
         statusTimer.Stop();
-        if (viewport.IsHighlighting) statusText.Text = ViewStatus();
+        if (viewport.Tool != DrawingTool.None) statusText.Text = ViewStatus();
         else status.Visibility = Visibility.Collapsed;
     }
     private ContextMenu BuildContextMenu()
@@ -467,19 +554,25 @@ public sealed class CaptureWindow : Window
         menu.Items.Add(new Separator());
         Add("等倍表示", "1 / Ctrl+0", viewport.ActualSize);
         Add("ウィンドウに合わせる", "F", viewport.Fit);
-        var highlighter = new MenuItem { Header = "蛍光ペン", InputGestureText = "H" };
-        var toggle = new MenuItem { Header = "ON / OFF", IsCheckable = true };
-        toggle.Click += (_, _) => viewport.ToggleHighlighter(); highlighter.Items.Add(toggle);
-        foreach (var color in HighlighterTool.Palette)
+        var drawing = new MenuItem { Header = "描画ツール" };
+        var marker = new MenuItem { Header = "蛍光ペン", InputGestureText = "H", IsCheckable = true };
+        marker.Click += (_, _) => viewport.ToggleHighlighter(); drawing.Items.Add(marker);
+        var plain = new MenuItem { Header = "ペン", InputGestureText = "P", IsCheckable = true };
+        plain.Click += (_, _) => viewport.TogglePen(); drawing.Items.Add(plain);
+        var label = new MenuItem { Header = "テキスト", InputGestureText = "X", IsCheckable = true };
+        label.Click += (_, _) => viewport.ToggleText(); drawing.Items.Add(label);
+        drawing.Items.Add(new Separator());
+        // The colours belong to whichever tool is in hand and are saved with it.
+        foreach (var color in DrawingPalette.Colors)
         {
             var item = new MenuItem { Header = color.Name, Icon = new System.Windows.Shapes.Ellipse { Width = 12, Height = 12, Fill = (Brush)new BrushConverter().ConvertFromString(color.Hex)! } };
-            item.Click += (_, _) => { viewport.CancelInteraction(); viewport.Highlighter.Color = (Color)ColorConverter.ConvertFromString(color.Hex); if (!viewport.IsHighlighting) viewport.ToggleHighlighter(); viewport.Refresh(); };
-            highlighter.Items.Add(item);
+            item.Click += (_, _) => PickColor(DrawingPalette.Parse(color.Hex));
+            drawing.Items.Add(item);
         }
-        highlighter.Items.Add(new Separator());
-        var thin = new MenuItem { Header = "細くする", InputGestureText = "[" }; thin.Click += (_, _) => viewport.ChangeWidth(-1); highlighter.Items.Add(thin);
-        var thick = new MenuItem { Header = "太くする", InputGestureText = "]" }; thick.Click += (_, _) => viewport.ChangeWidth(1); highlighter.Items.Add(thick);
-        menu.Items.Add(highlighter);
+        drawing.Items.Add(new Separator());
+        var thin = new MenuItem { Header = "細くする", InputGestureText = "[" }; thin.Click += (_, _) => ChangeWidth(-1); drawing.Items.Add(thin);
+        var thick = new MenuItem { Header = "太くする", InputGestureText = "]" }; thick.Click += (_, _) => ChangeWidth(1); drawing.Items.Add(thick);
+        menu.Items.Add(drawing);
         Add("描画をクリア", "Ctrl+Delete", Clear);
         var topmost = new MenuItem { Header = "常に手前に表示", IsCheckable = true };
         topmost.Click += (_, _) => Topmost = topmost.IsChecked; menu.Items.Add(topmost);
@@ -487,7 +580,10 @@ public sealed class CaptureWindow : Window
         Add("閉じる", "Delete", Close);
         menu.Opened += (_, _) =>
         {
-            viewport.CancelInteraction(); toggle.IsChecked = viewport.IsHighlighting; topmost.IsChecked = Topmost;
+            viewport.CancelInteraction(); topmost.IsChecked = Topmost;
+            marker.IsChecked = viewport.Tool == DrawingTool.Highlighter;
+            plain.IsChecked = viewport.Tool == DrawingTool.Pen;
+            label.IsChecked = viewport.Tool == DrawingTool.Text;
             autoClose.IsChecked = AutoCloseEnabled; retain.Visibility = AutoCloseEnabled ? Visibility.Visible : Visibility.Collapsed;
             exportHeader.IsChecked = settings.ExportHeaderEnabled;
         };
@@ -500,7 +596,7 @@ public sealed class CaptureWindow : Window
         copying = true;
         try
         {
-            viewport.CancelInteraction();
+            CommitText(); viewport.CancelInteraction();
             if (!await clipboard.CopyAsync(exporter.Compose(document, settings.CopyIncludesAnnotations, settings.ExportBorderEnabled, ExportHeader))) return;
             if (closed) return;
             ShowStatus(success); if (allowClose && settings.CloseAfterCopy) Close();
@@ -525,7 +621,7 @@ public sealed class CaptureWindow : Window
     }
     private void Save()
     {
-        viewport.CancelInteraction();
+        CommitText(); viewport.CancelInteraction();
         var dialog = new SaveFileDialog { Filter = "PNG画像 (*.png)|*.png", DefaultExt = ".png", FileName = $"Capture_{DateTime.Now:yyyyMMdd_HHmmss}.png", AddExtension = true };
         autoCloseTimer.Stop();
         try

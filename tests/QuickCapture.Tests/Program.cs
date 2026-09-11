@@ -43,6 +43,7 @@ internal static class Program
                 Run("Embedded multi-resolution application and tray icons", Icons);
                 Run("Undo / redo / clear / branching / history limit", History);
                 Run("Highlighter source pixels / opacity / PNG", Rendering);
+                Run("Plain pen writes opaque / labels measure, move and undo", DrawingTools);
                 Run("Export border / intact edge pixels / annotations / PNG / opt-out", ExportBorder);
                 Run("Header record / band above the capture / close button excluded", ExportHeader);
                 Run("Axis correction / preserves curves / corrected Undo and export", Straightening);
@@ -402,6 +403,34 @@ internal static class Program
         var tool = new HighlighterTool(); tool.Begin(new Point(1, 1)); tool.Add(new Point(10, 10), 0.1); Assert(tool.Finish() != null && !tool.IsDrawing, "Stroke commits");
         tool.Begin(new Point(2, 2)); tool.Cancel(); Assert(tool.Preview == null, "Draft cancel");
     }
+    /// The plain pen leaves an opaque line, and a label knows its own bounds so it
+    /// can be picked up, moved and undone as one step.
+    private static void DrawingTools()
+    {
+        var blue = DrawingPalette.Parse(AppSettings.DefaultPenColor);
+        Assert(new AppSettings().PenColor == "#2F7BF6" && new AppSettings().TextColor == AppSettings.DefaultTextColor, "The plain pen writes in blue");
+        var pen = new HighlighterTool { Opaque = true, Width = 6, Color = blue };
+        pen.Begin(new Point(20, 50)); pen.Add(new Point(120, 50), 0.1);
+        using var doc = new ImageDocument(White(200, 100));
+        doc.Add(pen.Finish()!);
+        var image = new ImageExportService().Compose(doc);
+        var pixel = new byte[4]; image.CopyPixels(new Int32Rect(70, 50, 1, 1), pixel, 4, 0);
+        Assert(pixel[0] == blue.B && pixel[1] == blue.G && pixel[2] == blue.R, $"The pen line is opaque: {pixel[2]}, {pixel[1]}, {pixel[0]}");
+        image.CopyPixels(new Int32Rect(70, 90, 1, 1), pixel, 4, 0); Assert(pixel[0] == 255, "Outside the line untouched");
+
+        var label = new TextAnnotation("あア亜A", new Point(10, 10), Colors.Red, 24);
+        Assert(label.Size.Width > 10 && label.Size.Height > 10, "A label measures itself");
+        Assert(label.Contains(new Point(12, 12)) && !label.Contains(new Point(8, 8)), "A label is picked up where it is drawn");
+        doc.Add(label);
+        var moved = label.Moved(new Vector(40, 20));
+        Assert(moved.Origin == new Point(50, 30) && moved.Text == label.Text && moved.Color == label.Color, "Moving keeps the text and the colour");
+        doc.Replace(label, moved);
+        Assert(doc.Annotations.Contains(moved) && !doc.Annotations.Contains(label), "The label moved");
+        doc.Undo(); Assert(doc.Annotations.Contains(label) && !doc.Annotations.Contains(moved), "The move undoes as one step");
+        doc.Redo(); Assert(doc.Annotations.Contains(moved), "The move redoes");
+        Assert(moved.Recoloured(Colors.Blue) is { Color.B: 255 } recoloured && recoloured.Origin == moved.Origin, "Recolouring keeps the place");
+        Assert(DrawingPalette.Colors.Length == 7 && DrawingPalette.Colors[0].Hex == AppSettings.DefaultPenColor, "The palette leads with the pen blue");
+    }
     private static void ExportBorder()
     {
         using var doc = new ImageDocument(White());
@@ -604,9 +633,11 @@ internal static class Program
     private static void Settings()
     {
         string path = Path.Combine(root, "artifacts", "test-settings.json"); var service = new SettingsService(path);
-        var settings = new AppSettings { GlobalShortcut = "Ctrl+Alt+Q", HighlighterWidth = 34, CloseAfterCopy = true, AutoCloseCaptures = true, ExportBorderEnabled = false, ExportHeaderEnabled = true };
+        var settings = new AppSettings { GlobalShortcut = "Ctrl+Alt+Q", HighlighterWidth = 34, CloseAfterCopy = true, AutoCloseCaptures = true, ExportBorderEnabled = false, ExportHeaderEnabled = true, PenColor = "#123456", PenWidth = 7, TextColor = "#ABCDEF", TextSize = 30 };
         service.Save(settings); Assert(service.Load() == settings, "Settings roundtrip");
+        Assert(service.Load().PenColor == "#123456" && service.Load().TextSize == 30, "The pen and label choices are kept for the next run");
         File.WriteAllText(path, "{}"); Assert(!service.Load().AutoCloseCaptures, "Older settings default to retaining captures");
+        Assert(service.Load().PenColor == AppSettings.DefaultPenColor && service.Load().TextColor == AppSettings.DefaultTextColor, "Older settings get the new pen and label colours");
         Assert(service.Load().ExportBorderEnabled && !service.Load().ExportHeaderEnabled, "Older settings enable the export border and record no header band");
         File.WriteAllText(path, "{bad"); Assert(service.Load().GlobalShortcut == "Ctrl+Shift+R" && service.LoadWarning != null, "Corrupt JSON fallback");
         bool invalid = false; try { AppSettings.ParseShortcut("R"); } catch (ArgumentException) { invalid = true; } Assert(invalid, "Unmodified key rejected");
