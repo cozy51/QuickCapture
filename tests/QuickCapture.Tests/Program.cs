@@ -244,8 +244,10 @@ internal static class Program
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             Assert(temporary.AutoCloseEnabled && !regular.AutoCloseEnabled && !pinned.AutoCloseEnabled, "Each capture owns its close mode independently of future settings");
             Assert(((CaptureFrame)temporary.Content).AutoClose && !((CaptureFrame)pinned.Content).AutoClose, "Frame distinguishes temporary and retained images");
+            Assert(temporary.Countdown != null && regular.Countdown == null && pinned.Countdown == null, $"Only a temporary capture counts down: {temporary.Countdown}");
             await Task.Delay(2400);
             Assert(temporary.IsVisible, "Temporary capture remains visible before three seconds");
+            Assert(temporary.Countdown == "1", $"The number counts the seconds down: {temporary.Countdown}");
             await Task.Delay(1100);
             Assert(closedAt.HasValue && closedAt.Value.TotalSeconds >= 2.9 && closedAt.Value.TotalSeconds < 3.6, "Capture closes after three seconds");
             Assert(temporaryDoc.Image == null && regular.IsVisible && pinned.IsVisible, "Only temporary image closes and releases bitmap");
@@ -268,7 +270,7 @@ internal static class Program
         CaptureWindow Create()
         {
             var window = new CaptureWindow(new ImageDocument(White()), new Int32Rect(200, 200, 200, 100), preferences with { },
-                () => preferences.AutoCloseCaptures, enabled => preferences = preferences with { AutoCloseCaptures = enabled });
+                enabled => preferences = preferences with { AutoCloseCaptures = enabled });
             opened.Add(window); window.Show(); return window;
         }
         MenuItem Mode(CaptureWindow window)
@@ -284,20 +286,23 @@ internal static class Program
         try
         {
             var original = Create(); var peer = Create();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             SetMode(original, true);
-            Assert(preferences.AutoCloseCaptures && Mode(peer).IsChecked, "Other menus reflect the shared next-capture preference");
-            Assert(!original.AutoCloseEnabled && !peer.AutoCloseEnabled, "Menu does not arm existing captures");
+            Assert(preferences.AutoCloseCaptures, "The mode is kept for the captures that follow");
+            Assert(!Mode(peer).IsChecked && Mode(original).IsChecked, "Each menu shows the mode of its own image");
+            Assert(original.AutoCloseEnabled && !peer.AutoCloseEnabled, "The image whose menu was used switches at once, the others keep theirs");
+            Assert(original.Countdown == "3", $"The switched image starts counting down: {original.Countdown}");
             var next = Create(); var following = Create();
             Assert(next.AutoCloseEnabled && following.AutoCloseEnabled, "Mode applies continuously to future captures");
             SetMode(peer, false);
             var retained = Create();
-            Assert(!retained.AutoCloseEnabled && next.AutoCloseEnabled && following.AutoCloseEnabled, "Turning off changes only future captures");
+            Assert(!retained.AutoCloseEnabled && next.AutoCloseEnabled && following.AutoCloseEnabled, "Turning off frees that image and future captures, not the armed ones");
             await Task.Delay(3500);
-            Assert(!next.IsVisible && !following.IsVisible, "Future temporary captures expire");
-            Assert(original.IsVisible && peer.IsVisible && retained.IsVisible, "The image whose menu was used remains open past three seconds");
+            Assert(!original.IsVisible && !next.IsVisible && !following.IsVisible, "The switched image and the temporary captures expire");
+            Assert(peer.IsVisible && retained.IsVisible, "Images left on the retained mode stay open");
         }
         finally { foreach (var window in opened) window.Close(); }
-        passed++; Console.WriteLine("PASS Context menu changes future captures only / shared mode / continuous captures / existing timers unchanged");
+        passed++; Console.WriteLine("PASS Context menu switches that image at once / shared mode / continuous captures / other images unchanged");
     }
     private static async Task CaptureModeAppearance()
     {
@@ -494,7 +499,7 @@ internal static class Program
         var opened = new List<CaptureWindow>();
         CaptureWindow Create()
         {
-            var window = new CaptureWindow(new ImageDocument(White()), new Int32Rect(200, 200, 200, 100), preferences with { }, null, null,
+            var window = new CaptureWindow(new ImageDocument(White()), new Int32Rect(200, 200, 200, 100), preferences with { }, null,
                 enabled =>
                 {
                     preferences = preferences with { ExportHeaderEnabled = enabled };
