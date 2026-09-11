@@ -196,6 +196,11 @@ internal static class Program
                 int frame = (int)CaptureFrame.Thickness * 2, band = (int)CaptureFrame.HeaderHeight;
                 Assert(opened.Pixels.Width == 400 + frame && opened.Pixels.Height == 240 + frame + band,
                     $"Window hugs the capture in pixels: {opened.Pixels.Width} x {opened.Pixels.Height}");
+                // The picture must land back on the pixels it was taken from.
+                var area = NativeMethods.WorkArea(new Point(monitor.X + 180, monitor.Y + 180));
+                int pictureX = opened.Pixels.X + (int)CaptureFrame.Thickness, pictureY = opened.Pixels.Y + band + (int)CaptureFrame.Thickness;
+                if (monitor.X + 180 - CaptureFrame.Thickness >= area.X && monitor.Y + 180 - band - CaptureFrame.Thickness >= area.Y)
+                    Assert(pictureX == monitor.X + 180 && pictureY == monitor.Y + 180, $"Picture covers the captured pixels: {pictureX}, {pictureY}");
                 GetWindowRect(hwnd, out var before);
                 var anchor = new Point(75, 65); var source = view.Zoom.ToImage(anchor); var screen = view.PointToScreen(anchor);
                 view.ZoomAt(120, anchor); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
