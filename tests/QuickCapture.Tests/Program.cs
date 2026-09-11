@@ -43,7 +43,7 @@ internal static class Program
                 Run("Embedded multi-resolution application and tray icons", Icons);
                 Run("Undo / redo / clear / branching / history limit", History);
                 Run("Highlighter source pixels / opacity / PNG", Rendering);
-                Run("Plain pen writes opaque / labels measure, move and undo", DrawingTools);
+                Run("Plain pen writes opaque / labels measure, move, retype and undo", DrawingTools);
                 Run("Export border / intact edge pixels / annotations / PNG / opt-out", ExportBorder);
                 Run("Header record / band above the capture / close button excluded", ExportHeader);
                 Run("Axis correction / preserves curves / corrected Undo and export", Straightening);
@@ -475,6 +475,21 @@ internal static class Program
         doc.Redo(); Assert(doc.Annotations.Contains(moved), "The move redoes");
         Assert(moved.Recoloured(Colors.Blue) is { Color.B: 255 } recoloured && recoloured.Origin == moved.Origin, "Recolouring keeps the place");
         Assert(DrawingPalette.Colors.Length == 7 && DrawingPalette.Colors[0].Hex == AppSettings.DefaultPenColor, "The palette leads with the pen blue");
+
+        // Double clicking a label opens it for retyping, and emptying it removes it.
+        using var view = new ImageViewport(doc);
+        view.SetTool(DrawingTool.Text);
+        view.AddText(new Point(10, 60), "かき");
+        var written = view.SelectText(new Point(12, 62));
+        Assert(written != null && written.Text == "かき", "The label is placed and picked out");
+        view.ApplyTextEdit("かきく");
+        var retyped = doc.Annotations.OfType<TextAnnotation>().Single(item => item.Text == "かきく");
+        Assert(retyped.Origin == written!.Origin && retyped.Color == written.Color && retyped.FontSize == written.FontSize, "Retyping keeps the place, the colour and the size");
+        doc.Undo(); Assert(doc.Annotations.OfType<TextAnnotation>().Any(item => item.Text == "かき"), "Retyping undoes on its own");
+        doc.Redo();
+        view.SelectText(new Point(12, 62)); view.ApplyTextEdit("  ");
+        Assert(!doc.Annotations.OfType<TextAnnotation>().Any(item => item.Text == "かきく"), "Emptying a label takes it away");
+        doc.Undo(); Assert(doc.Annotations.OfType<TextAnnotation>().Any(item => item.Text == "かきく"), "Removing a label undoes");
     }
     private static void ExportBorder()
     {

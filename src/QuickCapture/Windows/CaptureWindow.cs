@@ -40,6 +40,8 @@ public sealed class CaptureWindow : Window
     private readonly TextBox textEditor;
     private Point textOrigin;
     private bool textEditorHeldTopmost;
+    /// Set while the editor is retyping a label that is already on the picture.
+    private bool retyping;
     private readonly Border status;
     private readonly TextBlock statusText;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -88,6 +90,7 @@ public sealed class CaptureWindow : Window
         viewport.TextColor = DrawingPalette.Parse(this.settings.TextColor);
         viewport.TextSize = this.settings.TextSize;
         viewport.TextRequested += StartTextEdit;
+        viewport.TextEditRequested += EditText;
         var grid = new Grid { ClipToBounds = true };
         frame = new CaptureFrame { Child = grid, CapturedAt = document.CapturedAt, RecordHeader = this.settings.ExportHeaderEnabled };
         Content = frame;
@@ -493,7 +496,7 @@ public sealed class CaptureWindow : Window
         textEditor.FontSize = Math.Max(8, viewport.TextSize * viewport.Zoom.ViewScale);
         var ink = new SolidColorBrush(viewport.TextColor); ink.Freeze();
         textEditor.Foreground = ink; textEditor.BorderBrush = ink; textEditor.CaretBrush = ink;
-        textEditor.Text = string.Empty;
+        textEditor.Text = string.Empty; retyping = false;
         textEditor.Visibility = Visibility.Visible;
         if (Topmost) { textEditorHeldTopmost = true; Topmost = false; }
         if (!IsActive) Activate();
@@ -522,6 +525,18 @@ public sealed class CaptureWindow : Window
         }
         catch (Exception ex) { ShowStatus("日本語入力を有効にできません: " + ex.Message); }
     }
+    /// A label was double clicked: open the editor on its own text, colour and
+    /// size, and put what comes out back in its place.
+    private void EditText(TextAnnotation label)
+    {
+        StartTextEdit(label.Origin);
+        retyping = true;
+        textEditor.FontSize = Math.Max(8, label.FontSize * viewport.Zoom.ViewScale);
+        var ink = new SolidColorBrush(label.Color); ink.Freeze();
+        textEditor.Foreground = ink; textEditor.BorderBrush = ink; textEditor.CaretBrush = ink;
+        textEditor.Text = label.Text; textEditor.SelectAll();
+        ShowStatus("文字を書き直す · Enterで確定 · Escで取り消し · 空にすると消えます");
+    }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
@@ -531,8 +546,9 @@ public sealed class CaptureWindow : Window
     {
         if (textEditor.Visibility != Visibility.Visible) return;
         string text = textEditor.Text;
+        bool edit = retyping;
         CloseTextEditor();
-        viewport.AddText(textOrigin, text);
+        if (edit) viewport.ApplyTextEdit(text); else viewport.AddText(textOrigin, text);
     }
     private void CancelText()
     {
@@ -541,7 +557,7 @@ public sealed class CaptureWindow : Window
     }
     private void CloseTextEditor()
     {
-        textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty;
+        textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty; retyping = false;
         if (textEditorHeldTopmost) { Topmost = true; textEditorHeldTopmost = false; }
         if (!closed) viewport.Focus();
     }
