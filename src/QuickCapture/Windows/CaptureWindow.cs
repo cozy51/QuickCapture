@@ -112,8 +112,11 @@ public sealed class CaptureWindow : Window
             FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.NoWrap
         };
         // Japanese input needs the IME on the box and the candidate window in front
-        // of the picture, so the editor turns the always-on-top state off while it is open.
+        // of the picture, so the editor turns the always-on-top state off while it is
+        // open, and asks for the IME to be switched on as soon as it takes focus.
         InputMethod.SetIsInputMethodEnabled(textEditor, true);
+        InputMethod.SetPreferredImeState(textEditor, InputMethodState.On);
+        InputMethod.SetPreferredImeConversionMode(textEditor, ImeConversionModeValues.Native | ImeConversionModeValues.FullShape);
         textEditor.PreviewKeyDown += TextEditorKey;
         // Focus leaving for another control finishes the label; focus leaving the
         // application (the IME candidate window) must not close the editor.
@@ -500,10 +503,24 @@ public sealed class CaptureWindow : Window
         textEditor.Focus(); Keyboard.Focus(textEditor);
         Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
         {
-            if (closed || textEditor.Visibility != Visibility.Visible || textEditor.IsKeyboardFocusWithin) return;
-            textEditor.Focus(); Keyboard.Focus(textEditor);
+            if (closed || textEditor.Visibility != Visibility.Visible) return;
+            if (!textEditor.IsKeyboardFocusWithin) { textEditor.Focus(); Keyboard.Focus(textEditor); }
+            TurnImeOn();
         });
-        ShowStatus("文字を入力 · Enterで確定 · Shift+Enterで改行 · Escで取り消し · 日本語入力も使えます");
+        ShowStatus("文字を入力（日本語入力ON · 半角/全角で切替） · Enterで確定 · Shift+Enterで改行 · Escで取り消し");
+    }
+    /// WPF asks for the IME through the focused element, but a window whose IME
+    /// context was dropped along the way ignores that and the mode key alike. Put
+    /// the default context back on the window and open the IME there as well.
+    private void TurnImeOn()
+    {
+        try
+        {
+            InputMethod.Current.ImeState = InputMethodState.On;
+            if (!NativeMethods.TurnImeOn(new WindowInteropHelper(this).Handle))
+                ShowStatus("日本語入力を開けませんでした · 半角/全角キー、またはCtrl+Vでの貼り付けをお試しください");
+        }
+        catch (Exception ex) { ShowStatus("日本語入力を有効にできません: " + ex.Message); }
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {

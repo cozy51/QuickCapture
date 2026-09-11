@@ -48,6 +48,11 @@ internal static class NativeMethods
     [DllImport("gdi32.dll")] internal static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
     [DllImport("gdi32.dll")] internal static extern bool DeleteObject(IntPtr obj);
     [DllImport("gdi32.dll", SetLastError = true)] internal static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sx, int sy, uint rop);
+    [DllImport("imm32.dll")] internal static extern bool ImmAssociateContextEx(IntPtr window, IntPtr context, uint flags);
+    [DllImport("imm32.dll")] internal static extern IntPtr ImmGetContext(IntPtr window);
+    [DllImport("imm32.dll")] internal static extern bool ImmReleaseContext(IntPtr window, IntPtr context);
+    [DllImport("imm32.dll")] internal static extern bool ImmSetOpenStatus(IntPtr context, bool open);
+    [DllImport("imm32.dll")] internal static extern bool ImmGetOpenStatus(IntPtr context);
 
     /// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. The app manifest already asks
     /// for it, but a host that starts the app with its own manifest (running
@@ -57,6 +62,18 @@ internal static class NativeMethods
     {
         try { SetProcessDpiAwarenessContext(new IntPtr(-4)); }
         catch (EntryPointNotFoundException) { } // Before Windows 10 1703.
+    }
+    /// Hand the window back the default IME context and switch the IME on. A
+    /// window whose context was dropped takes plain keys and pasted text but
+    /// refuses the mode key, which is what stops Japanese from being typed.
+    internal static bool TurnImeOn(IntPtr window)
+    {
+        if (window == IntPtr.Zero) return false;
+        ImmAssociateContextEx(window, IntPtr.Zero, 0x0010); // IACE_DEFAULT
+        var context = ImmGetContext(window);
+        if (context == IntPtr.Zero) return false;
+        try { return ImmSetOpenStatus(context, true) && ImmGetOpenStatus(context); }
+        finally { ImmReleaseContext(window, context); }
     }
     internal static Point CursorPosition()
     {
