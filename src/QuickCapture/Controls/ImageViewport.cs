@@ -46,6 +46,8 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
     public event Action<Point, Point>? ZoomSizeChanged;
     /// The label tool was clicked on empty picture: the window opens an editor.
     public event Action<Point>? TextRequested;
+    /// A label was double clicked: the window opens the editor on its text.
+    public event Action<TextAnnotation>? TextEditRequested;
     internal enum DragAction { MoveWindow, PanImage, Highlight }
     /// Ctrl borrows the highlighter and Shift the plain pen for one drag.
     internal static DragAction ResolveDrag(bool drawing, ModifierKeys modifiers, bool space) =>
@@ -134,6 +136,18 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
     }
     /// Picks out the label at that point, as clicking it with the label tool does.
     public TextAnnotation? SelectText(Point image) { selectedText = TextAt(image); Refresh(); return selectedText; }
+    /// The label the editor was opened on, retyped. Emptying it takes it away.
+    public void ApplyTextEdit(string text)
+    {
+        if (selectedText == null) return;
+        if (string.IsNullOrWhiteSpace(text)) { document.Remove(selectedText); selectedText = null; }
+        else
+        {
+            var next = new TextAnnotation(text, selectedText.Origin, selectedText.Color, selectedText.FontSize);
+            document.Replace(selectedText, next); selectedText = next;
+        }
+        Refresh();
+    }
     private TextAnnotation? TextAt(Point image)
     {
         for (int i = document.Annotations.Count - 1; i >= 0; i--)
@@ -210,7 +224,11 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
             var label = TextAt(target);
             if (label != null)
             {
-                selectedText = label; heldText = label; textGrab = target;
+                selectedText = label;
+                // The first click of the pair has already picked it out; the second
+                // one opens the editor on what it says.
+                if (e.ClickCount == 2) { TextEditRequested?.Invoke(label); Refresh(); e.Handled = true; return; }
+                heldText = label; textGrab = target;
                 CaptureMouse(); UpdateCursor(); Refresh(); e.Handled = true; return;
             }
             if (Inside(target)) { selectedText = null; TextRequested?.Invoke(target); Refresh(); e.Handled = true; return; }
@@ -269,5 +287,5 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         ReleaseMouseCapture(); Refresh();
     }
     public void CancelMode() { CancelInteraction(); selectedText = null; Tool = DrawingTool.None; UpdateCursor(); Refresh(); }
-    public void Dispose() { document.Changed -= Refresh; CancelMode(); ViewChanged = null; ZoomSizeChanged = null; TextRequested = null; }
+    public void Dispose() { document.Changed -= Refresh; CancelMode(); ViewChanged = null; ZoomSizeChanged = null; TextRequested = null; TextEditRequested = null; }
 }

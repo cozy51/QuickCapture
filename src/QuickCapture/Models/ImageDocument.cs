@@ -22,6 +22,13 @@ public sealed class ImageDocument(BitmapSource image, DateTimeOffset? capturedAt
         if (index < 0) return;
         History.Execute(new ReplaceAction(annotations, index, existing, replacement)); Changed?.Invoke();
     }
+    /// Emptying a label takes it off the picture, and Undo puts it back where it was.
+    public void Remove(IAnnotation annotation)
+    {
+        int index = annotations.IndexOf(annotation);
+        if (index < 0) return;
+        History.Execute(new RemoveAction(annotations, index, annotation)); Changed?.Invoke();
+    }
     public void Clear() { if (annotations.Count == 0) return; History.Execute(new ClearAction(annotations)); Changed?.Invoke(); }
     public void Undo() { History.Undo(); Changed?.Invoke(); }
     public void Redo() { History.Redo(); Changed?.Invoke(); }
@@ -35,6 +42,11 @@ public sealed class ImageDocument(BitmapSource image, DateTimeOffset? capturedAt
     {
         public void Execute() => target[index] = to;
         public void Undo() => target[index] = from;
+    }
+    private sealed class RemoveAction(List<IAnnotation> target, int index, IAnnotation annotation) : IUndoableAction
+    {
+        public void Execute() => target.RemoveAt(index);
+        public void Undo() => target.Insert(index, annotation);
     }
     private sealed class ClearAction(List<IAnnotation> target) : IUndoableAction
     {
