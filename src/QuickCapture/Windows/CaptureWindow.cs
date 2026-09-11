@@ -100,6 +100,7 @@ public sealed class CaptureWindow : Window
         grid.Children.Add(viewport);
         toolbar = new CaptureToolbar(DragMove, () => _ = CopyAsync(), viewport.ToggleHighlighter, viewport.TogglePen, viewport.ToggleText,
             Undo, viewport.ActualSize, viewport.Fit, Save, Close, PickColor) { Visibility = Visibility.Collapsed };
+        toolbar.Update(viewport.Tool, false, viewport.ToolColor);
         grid.Children.Add(toolbar);
         // Labels are typed in a real text box so the IME works; it sits over the
         // picture at the spot that was clicked and leaves a TextAnnotation behind.
