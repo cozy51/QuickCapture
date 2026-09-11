@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Linq;
 using Microsoft.Win32;
@@ -23,6 +24,12 @@ public partial class App : Application
     private readonly SettingsService settingsService = new();
     private AppSettings settings = new();
     private SettingsWindow? settingsWindow;
+    /// Runs before WPF touches the screen, so the process is per-monitor DPI aware
+    /// however it was started. Without this, launching through the shared host
+    /// (`dotnet QuickCapture.dll`, a way around an exe blocked by Smart App
+    /// Control) would leave Windows scaling the windows for us.
+    [ModuleInitializer]
+    internal static void UsePerMonitorDpi() => NativeMethods.UsePerMonitorDpi();
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
