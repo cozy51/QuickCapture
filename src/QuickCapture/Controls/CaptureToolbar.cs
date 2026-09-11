@@ -26,8 +26,8 @@ public sealed class CaptureToolbar : Border
         grip.MouseLeftButtonDown += (_, e) => { move(); e.Handled = true; }; panel.Children.Add(grip);
         Add("⧉", "コピー · Ctrl+C", copy);
         highlighter = Add("H", "蛍光ペン · H / Ctrl＋ドラッグ", highlight);
-        pen = Add("✎", "ペン · P", drawPen);
-        text = Add("T", "テキスト · X / クリックで入力、文字をドラッグで移動", addText);
+        pen = Add("✎", "ペン · P / Shift＋ドラッグ", drawPen);
+        text = Add("T", "テキスト · X / クリックで入力 · 文字をクリックで選択、ドラッグで移動、[ ]で大きさ", addText);
         // The colours change whichever tool is in hand, so they sit beside them.
         foreach (var (name, hex) in DrawingPalette.Colors)
         {

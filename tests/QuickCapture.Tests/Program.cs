@@ -132,6 +132,8 @@ internal static class Program
         Assert(ImageViewport.ResolveDrag(true, ModifierKeys.Alt, false) == ImageViewport.DragAction.PanImage, "Alt overrides highlighter");
         Assert(ImageViewport.ResolveDrag(true, ModifierKeys.None, true) == ImageViewport.DragAction.PanImage, "Space overrides highlighter");
         Assert(ImageViewport.ResolveDrag(false, ModifierKeys.Control, false) == ImageViewport.DragAction.Highlight, "Ctrl draws without H mode");
+        Assert(ImageViewport.ResolveDrag(false, ModifierKeys.Shift, false) == ImageViewport.DragAction.Highlight, "Shift draws with the plain pen");
+        Assert(ImageViewport.ResolveDrag(false, ModifierKeys.Shift, true) == ImageViewport.DragAction.PanImage, "Space still wins over Shift");
         Assert(ImageViewport.ResolveDrag(false, ModifierKeys.Control | ModifierKeys.Alt, false) == ImageViewport.DragAction.PanImage, "Alt overrides Ctrl drawing");
         Assert(ImageViewport.ResolveDrag(false, ModifierKeys.Control, true) == ImageViewport.DragAction.PanImage, "Space overrides Ctrl drawing");
     }
@@ -208,6 +210,17 @@ internal static class Program
             Colour("緑").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             Assert(view.Pen.Color == DrawingPalette.Parse("#68E675") && view.TextColor == DrawingPalette.Parse("#FF5555"), "Each tool keeps its own colour");
             Assert(saved != null && saved.PenColor == "#68E675" && saved.TextColor == "#FF5555", "Both colours reach the settings");
+            // A label can be picked out afterwards and resized, and the size sticks.
+            view.ToggleText();
+            view.AddText(new Point(20, 20), "テスト");
+            var placed = view.SelectText(new Point(24, 26));
+            Assert(placed != null && view.SelectedText == placed && placed.FontSize == 24, "Clicking a label picks it out");
+            window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            var drawingMenu = window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "描画ツール");
+            drawingMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "太くする").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Assert(view.TextSize == 26 && view.SelectedText?.FontSize == 26, $"The picked label grows with the tool: {view.TextSize}");
+            Assert(saved != null && saved.TextSize == 26, "The label size is kept for the next captures");
+            doc.Undo(); Assert(doc.Annotations.OfType<TextAnnotation>().Single().FontSize == 24, "Resizing a label undoes on its own");
         }
         finally { window.Close(); }
         passed++; Console.WriteLine("PASS Blue labels and pen / palette per tool / colours saved for the next captures");

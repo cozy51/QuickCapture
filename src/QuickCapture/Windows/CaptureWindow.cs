@@ -39,6 +39,7 @@ public sealed class CaptureWindow : Window
     private readonly CaptureToolbar toolbar;
     private readonly TextBox textEditor;
     private Point textOrigin;
+    private bool textEditorHeldTopmost;
     private readonly Border status;
     private readonly TextBlock statusText;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -105,12 +106,17 @@ public sealed class CaptureWindow : Window
         textEditor = new TextBox
         {
             Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-            MinWidth = 40, MaxWidth = 640, BorderThickness = new Thickness(1), Padding = new Thickness(0), AcceptsReturn = true,
-            Background = new SolidColorBrush(Color.FromArgb(235, 255, 255, 255)), BorderBrush = new SolidColorBrush(Color.FromRgb(120, 130, 145)),
+            MinWidth = 60, MaxWidth = 640, BorderThickness = new Thickness(2), Padding = new Thickness(2, 0, 2, 0), AcceptsReturn = true,
+            Background = new SolidColorBrush(Color.FromArgb(242, 255, 255, 255)),
             FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.NoWrap
         };
+        // Japanese input needs the IME on the box and the candidate window in front
+        // of the picture, so the editor turns the always-on-top state off while it is open.
+        InputMethod.SetIsInputMethodEnabled(textEditor, true);
         textEditor.PreviewKeyDown += TextEditorKey;
-        textEditor.LostKeyboardFocus += (_, _) => CommitText();
+        // Focus leaving for another control finishes the label; focus leaving the
+        // application (the IME candidate window) must not close the editor.
+        textEditor.LostKeyboardFocus += (_, e) => { if (e.NewFocus != null) CommitText(); };
         grid.Children.Add(textEditor);
         statusText = new TextBlock { Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap };
         status = new Border { Background = new SolidColorBrush(Color.FromArgb(220, 29, 33, 41)), CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Child = statusText, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
@@ -479,13 +485,24 @@ public sealed class CaptureWindow : Window
         CommitText();
         textOrigin = origin;
         var at = viewport.Zoom.ToViewport(origin);
-        textEditor.Margin = new Thickness(Math.Max(0, at.X - 2), Math.Max(0, at.Y - 2), 0, 0);
+        textEditor.Margin = new Thickness(Math.Max(0, at.X - 4), Math.Max(0, at.Y - 4), 0, 0);
         textEditor.FontSize = Math.Max(8, viewport.TextSize * viewport.Zoom.ViewScale);
-        textEditor.Foreground = new SolidColorBrush(viewport.TextColor);
+        var ink = new SolidColorBrush(viewport.TextColor); ink.Freeze();
+        textEditor.Foreground = ink; textEditor.BorderBrush = ink; textEditor.CaretBrush = ink;
         textEditor.Text = string.Empty;
         textEditor.Visibility = Visibility.Visible;
+        if (Topmost) { textEditorHeldTopmost = true; Topmost = false; }
+        if (!IsActive) Activate();
+        // A box that has just become visible is not arranged yet, and focus put on
+        // it before that does not stick — which is what keeps the IME away.
+        textEditor.UpdateLayout();
         textEditor.Focus(); Keyboard.Focus(textEditor);
-        ShowStatus("文字を入力 · Enterで確定 · Shift+Enterで改行 · Escで取り消し");
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (closed || textEditor.Visibility != Visibility.Visible || textEditor.IsKeyboardFocusWithin) return;
+            textEditor.Focus(); Keyboard.Focus(textEditor);
+        });
+        ShowStatus("文字を入力 · Enterで確定 · Shift+Enterで改行 · Escで取り消し · 日本語入力も使えます");
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
@@ -496,15 +513,19 @@ public sealed class CaptureWindow : Window
     {
         if (textEditor.Visibility != Visibility.Visible) return;
         string text = textEditor.Text;
-        textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty;
+        CloseTextEditor();
         viewport.AddText(textOrigin, text);
-        viewport.Focus();
     }
     private void CancelText()
     {
         if (textEditor.Visibility != Visibility.Visible) return;
+        CloseTextEditor();
+    }
+    private void CloseTextEditor()
+    {
         textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty;
-        viewport.Focus();
+        if (textEditorHeldTopmost) { Topmost = true; textEditorHeldTopmost = false; }
+        if (!closed) viewport.Focus();
     }
     private void Undo() { viewport.CancelInteraction(); document.Undo(); }
     private void Clear() { viewport.CancelInteraction(); document.Clear(); }
@@ -517,7 +538,7 @@ public sealed class CaptureWindow : Window
     {
         DrawingTool.Highlighter => $"  ·  蛍光ペン {viewport.Highlighter.Width:0}px  ·  Alt / Spaceでパン",
         DrawingTool.Pen => $"  ·  ペン {viewport.Pen.Width:0}px  ·  Alt / Spaceでパン",
-        DrawingTool.Text => "  ·  テキスト · クリックで入力、文字をドラッグで移動",
+        DrawingTool.Text => $"  ·  テキスト {viewport.TextSize:0}px  ·  クリックで入力、文字をドラッグで移動、[ ]で大きさ",
         _ => ""
     };
     private void ShowStatus(string text)
