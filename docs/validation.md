@@ -2,6 +2,15 @@
 
 実施日: 2026-09-08（JST）
 
+## IMEモードが切り替えられない件（2026-09-12）
+
+入力欄でIMEのON/OFFが切り替えられず日本語が打てない（貼り付けは可能）という報告への対処。キー入力と貼り付けが通るのにモードキーだけ効かない状態は、ウィンドウのIMEコンテキストが外れている（`ImmAssociateContext`にNULLが入っている）ときの症状。
+
+- `ImmAssociateContextEx(hwnd, IntPtr.Zero, IACE_DEFAULT)`でウィンドウに既定のIMEコンテキストを戻し、`ImmSetOpenStatus`でIMEを開く（`NativeMethods.TurnImeOn`）。フォーカスが落ち着いたInput優先度で実行する。
+- WPF側でも`InputMethod.PreferredImeState = On`と変換モード（Native | FullShape）を入力欄に設定し、フォーカス時に`InputMethod.Current.ImeState = On`にする。
+- 開けなかった場合はステータスにその旨と代替手段（半角/全角キー、Ctrl+Vでの貼り付け）を表示する。
+- **Windows上でのビルド・テスト実行は未実施**（作業環境がLinuxのため）。IME周りは環境依存が大きいため、実機での確認が必要。
+
 ## 色パレットのプルダウン化（2026-09-12）
 
 - ツールバーに7色を並べていたため横幅を取りすぎていた。色は1つのボタン（今のツールの色を丸で表示＋▾）にまとめ、押すと色の一覧が下に開くプルダウンへ変更した。一覧では今の色を太字で示す。ツール未選択のときは丸を薄く表示する。
