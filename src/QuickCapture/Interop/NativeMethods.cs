@@ -33,6 +33,7 @@ internal static class NativeMethods
     [DllImport("user32.dll")] internal static extern IntPtr MonitorFromPoint(POINT point, uint flags);
     [DllImport("user32.dll")] internal static extern bool GetCursorPos(out POINT point);
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(IntPtr window);
+    [DllImport("user32.dll", SetLastError = true)] internal static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] internal static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out RECT rect);
     [DllImport("user32.dll", SetLastError = true)] internal static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint key);
@@ -48,6 +49,15 @@ internal static class NativeMethods
     [DllImport("gdi32.dll")] internal static extern bool DeleteObject(IntPtr obj);
     [DllImport("gdi32.dll", SetLastError = true)] internal static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sx, int sy, uint rop);
 
+    /// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. The app manifest already asks
+    /// for it, but a host that starts the app with its own manifest (running
+    /// `dotnet QuickCapture.dll` instead of the exe) does not carry it. Windows
+    /// refuses the call, harmlessly, once the awareness is already set.
+    internal static void UsePerMonitorDpi()
+    {
+        try { SetProcessDpiAwarenessContext(new IntPtr(-4)); }
+        catch (EntryPointNotFoundException) { } // Before Windows 10 1703.
+    }
     internal static Point CursorPosition()
     {
         if (!GetCursorPos(out var p)) throw new Win32Exception();
