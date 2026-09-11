@@ -8,12 +8,13 @@ public sealed record AppSettings
 {
     public const string DefaultHighlighterColor = "#68E675";
     public const string DefaultPenColor = "#2F7BF6";
-    public const string DefaultTextColor = "#E5484D";
+    public const string DefaultTextColor = DefaultPenColor;
     public string GlobalShortcut { get; set; } = "Ctrl+Shift+R";
     public string HighlighterColor { get; set; } = DefaultHighlighterColor;
     public double HighlighterWidth { get; set; } = 20;
     public double HighlighterOpacity { get; set; } = 0.45;
-    /// The plain pen writes in blue, the labels in red, both kept between runs.
+    /// The plain pen and the labels both start blue, and keep whatever colour
+    /// they were last given between runs.
     public string PenColor { get; set; } = DefaultPenColor;
     public double PenWidth { get; set; } = 4;
     public string TextColor { get; set; } = DefaultTextColor;

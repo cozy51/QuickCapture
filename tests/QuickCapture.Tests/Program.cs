@@ -56,6 +56,7 @@ internal static class Program
                 await RecordHeaderMode(args.Contains("--integration"));
                 await AutoCloseWindows();
                 await NextCaptureMode();
+                await DrawingPreferences();
                 await ZoomWindowSizing();
                 await CaptureModeAppearance();
                 if (args.Contains("--integration"))
@@ -179,6 +180,37 @@ internal static class Program
         }
         finally { first.Close(); second.Close(); third.Close(); }
         passed++; Console.WriteLine("PASS Capture numbering / hide, minimize, restore, close / fixed timestamp / metadata excluded from export");
+    }
+    /// The colour a tool is given is the colour the next captures start with, so
+    /// the choice has to reach the settings, not just this image.
+    private static async Task DrawingPreferences()
+    {
+        AppSettings? saved = null;
+        using var doc = new ImageDocument(White(200, 100));
+        var window = new CaptureWindow(doc, new Int32Rect(200, 200, 200, 100), new AppSettings(), null, null, next => saved = next with { });
+        try
+        {
+            window.Show(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            var view = ((Grid)((CaptureFrame)window.Content).Child).Children.OfType<ImageViewport>().Single();
+            Assert(AppSettings.DefaultTextColor == "#2F7BF6" && view.TextColor == DrawingPalette.Parse(AppSettings.DefaultTextColor), "Labels are written in blue");
+            Assert(view.Pen.Color == DrawingPalette.Parse(AppSettings.DefaultPenColor), "The plain pen writes in blue");
+            view.ToggleText();
+            MenuItem Colour(string name)
+            {
+                window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+                var tools = window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "描画ツール");
+                return tools.Items.OfType<MenuItem>().Single(item => (item.Header as string) == name);
+            }
+            Colour("赤").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Assert(view.TextColor == DrawingPalette.Parse("#FF5555") && view.Tool == DrawingTool.Text, "The label colour follows the palette");
+            Assert(saved != null && saved.TextColor == "#FF5555", $"The label colour is kept for the next captures: {saved?.TextColor}");
+            view.TogglePen();
+            Colour("緑").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Assert(view.Pen.Color == DrawingPalette.Parse("#68E675") && view.TextColor == DrawingPalette.Parse("#FF5555"), "Each tool keeps its own colour");
+            Assert(saved != null && saved.PenColor == "#68E675" && saved.TextColor == "#FF5555", "Both colours reach the settings");
+        }
+        finally { window.Close(); }
+        passed++; Console.WriteLine("PASS Blue labels and pen / palette per tool / colours saved for the next captures");
     }
     private static async Task ZoomWindowSizing()
     {
