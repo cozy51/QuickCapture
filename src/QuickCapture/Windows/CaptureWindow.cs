@@ -55,10 +55,14 @@ public sealed class CaptureWindow : Window
     /// The user dragged the frame to another size; the window stops hugging then.
     private bool userSized;
     private int sizingWidth;
+    /// Where this capture came from, and whether the window still belongs there.
+    /// Moving, resizing or zooming hands the position over to the user.
+    private readonly Int32Rect capturedRegion;
+    private bool keepAtCapture = true;
 
     public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null)
     {
-        this.document = document; this.settings = settings ?? new();
+        this.document = document; this.settings = settings ?? new(); capturedRegion = region;
         this.setNextAutoClose = setNextAutoClose ?? (enabled => this.settings.AutoCloseCaptures = enabled);
         this.setExportHeader = setExportHeader ?? (enabled => SetExportHeader(enabled));
         Title = $"QuickCapture · {document.Width} × {document.Height}";
@@ -118,7 +122,7 @@ public sealed class CaptureWindow : Window
             if (AutoCloseEnabled) StartAutoClose();
             // Once everything has been laid out, put the picture on the very pixels
             // it came from, measured rather than assumed.
-            Dispatcher.BeginInvoke(DispatcherPriority.Background, () => AlignToCapture(region));
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () => AlignToCapture());
         };
         IsVisibleChanged += (_, _) => CaptureWindowRegistry.Refresh();
         StateChanged += (_, _) => CaptureWindowRegistry.Refresh();
@@ -228,7 +232,7 @@ public sealed class CaptureWindow : Window
         else if (message == 0x02E0) UndoDpiResize(hwnd, Marshal.PtrToStructure<NativeMethods.RECT>(lParam).Pixels); // WM_DPICHANGED
         // WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE: only a size the user dragged counts
         // as their own, a move does not.
-        else if (message == 0x0231) sizingWidth = NativeMethods.GetWindowRect(hwnd, out var before) ? before.Pixels.Width : 0;
+        else if (message == 0x0231) { keepAtCapture = false; sizingWidth = NativeMethods.GetWindowRect(hwnd, out var before) ? before.Pixels.Width : 0; }
         else if (message == 0x0232 && sizingWidth > 0 && NativeMethods.GetWindowRect(hwnd, out var after) && after.Pixels.Width != sizingWidth) userSized = true;
         return IntPtr.Zero;
     }
@@ -261,6 +265,9 @@ public sealed class CaptureWindow : Window
             // The viewport repaints from its own SizeChanged; refreshing here would
             // also pop the zoom status over a window the user has not touched.
             UpdateLayout();
+            // WPF also moved the window to the suggested rectangle; put the picture
+            // back on the pixels it came from.
+            AlignToCapture();
         });
     }
     /// The pixel size that shows the whole picture inside the frame.
@@ -303,20 +310,23 @@ public sealed class CaptureWindow : Window
     }
     /// Where the first pixel of the picture actually landed decides the position:
     /// the band, the border and anything Windows puts around the window are all
-    /// accounted for by measuring instead of adding them up. Only small errors are
-    /// corrected, so a window held inside the work area stays where it was put.
-    private void AlignToCapture(Int32Rect region)
+    /// accounted for by measuring instead of adding them up. The window still has
+    /// to fit the work area, so a capture at the very edge of the screen keeps as
+    /// much of the correction as there is room for.
+    private void AlignToCapture()
     {
-        if (closed || !viewport.IsLoaded || viewport.ActualWidth <= 0 || viewport.Zoom.Zoom != 1) return;
+        if (closed || !keepAtCapture || !viewport.IsLoaded || viewport.ActualWidth <= 0 || viewport.Zoom.Zoom != 1) return;
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect)) return;
         var shown = viewport.PointToScreen(viewport.Zoom.ToViewport(new Point(0, 0)));
-        int dx = region.X - (int)Math.Round(shown.X), dy = region.Y - (int)Math.Round(shown.Y);
-        if (Math.Abs(dx) > 8) dx = 0;
-        if (Math.Abs(dy) > 8) dy = 0;
-        if (dx == 0 && dy == 0) return;
         var pixels = rect.Pixels;
-        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, pixels.X + dx, pixels.Y + dy, 0, 0, 0x0001 | 0x0004 | 0x0010);
+        int dx = capturedRegion.X - (int)Math.Round(shown.X), dy = capturedRegion.Y - (int)Math.Round(shown.Y);
+        if (dx == 0 && dy == 0) return;
+        var work = NativeMethods.WorkArea(new Point(capturedRegion.X, capturedRegion.Y));
+        int x = Math.Clamp(pixels.X + dx, work.X, Math.Max(work.X, work.X + work.Width - pixels.Width));
+        int y = Math.Clamp(pixels.Y + dy, work.Y, Math.Max(work.Y, work.Y + work.Height - pixels.Height));
+        if (x == pixels.X && y == pixels.Y) return;
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010);
     }
     private void PlaceAtCapture(Int32Rect region)
     {
@@ -342,6 +352,7 @@ public sealed class CaptureWindow : Window
     }
     private void ResizeForZoom(Point imageAnchor, Point screenAnchor)
     {
+        keepAtCapture = false;
         int revision = ++zoomResizeRevision;
         double zoom = viewport.Zoom.Zoom;
         ApplyZoomBounds(imageAnchor, screenAnchor);
@@ -445,8 +456,8 @@ public sealed class CaptureWindow : Window
         Add("閉じる", "Delete", Close);
         var autoClose = new MenuItem { Header = "この画像から3秒で閉じる", InputGestureText = "T", IsCheckable = true };
         autoClose.Click += (_, _) => { SetNextCapturesAutoClose(autoClose.IsChecked); autoClose.IsChecked = AutoCloseEnabled; }; menu.Items.Add(autoClose);
-        var retain = new MenuItem { Header = "この画像を残す（自動終了を解除）" };
-        retain.Click += (_, _) => SetAutoClose(false); menu.Items.Add(retain);
+        var retain = new MenuItem { Header = "この画像から自動終了をやめる" };
+        retain.Click += (_, _) => SetNextCapturesAutoClose(false); menu.Items.Add(retain);
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
         Add("PNGで保存…", "Ctrl+S", Save);
