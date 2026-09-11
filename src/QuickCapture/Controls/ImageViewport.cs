@@ -17,7 +17,19 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
     private bool panning;
     private TextAnnotation? heldText;
     private TextAnnotation? draggedText;
+    private TextAnnotation? selectedText;
     private Point textGrab;
+    /// The pen this drag writes with: Shift or Ctrl can borrow one for a stroke.
+    private HighlighterTool? drawing;
+    private static readonly Pen LabelEdge = Frozen(Color.FromArgb(190, 47, 123, 246), 1, true);
+    private static readonly Pen SelectedEdge = Frozen(Color.FromRgb(47, 123, 246), 2, false);
+    private static Pen Frozen(Color color, double thickness, bool dashed)
+    {
+        var brush = new SolidColorBrush(color); brush.Freeze();
+        var pen = new Pen(brush, thickness);
+        if (dashed) pen.DashStyle = new DashStyle(new double[] { 3, 3 }, 0);
+        pen.Freeze(); return pen;
+    }
     public HighlighterTool Highlighter { get; } = new();
     public HighlighterTool Pen { get; } = new() { Opaque = true, Width = 4, Opacity = 1, Color = DrawingPalette.Parse(AppSettings.DefaultPenColor) };
     public Color TextColor { get; set; } = DrawingPalette.Parse(AppSettings.DefaultTextColor);
@@ -26,15 +38,21 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
     public bool IsHighlighting => Tool == DrawingTool.Highlighter;
     /// The pen a drag draws with right now.
     public HighlighterTool Stroke => Tool == DrawingTool.Pen ? Pen : Highlighter;
-    public bool IsInteracting => panning || Stroke.IsDrawing || heldText != null;
+    public bool IsInteracting => panning || drawing != null || heldText != null;
+    /// The label the label tool is working on, outlined so it is easy to see.
+    public TextAnnotation? SelectedText => selectedText;
     public ZoomController Zoom { get; } = new();
     public event Action? ViewChanged;
     public event Action<Point, Point>? ZoomSizeChanged;
     /// The label tool was clicked on empty picture: the window opens an editor.
     public event Action<Point>? TextRequested;
     internal enum DragAction { MoveWindow, PanImage, Highlight }
+    /// Ctrl borrows the highlighter and Shift the plain pen for one drag.
     internal static DragAction ResolveDrag(bool drawing, ModifierKeys modifiers, bool space) =>
-        space || (modifiers & ModifierKeys.Alt) != 0 ? DragAction.PanImage : drawing || (modifiers & ModifierKeys.Control) != 0 ? DragAction.Highlight : DragAction.MoveWindow;
+        space || (modifiers & ModifierKeys.Alt) != 0 ? DragAction.PanImage
+        : drawing || (modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0 ? DragAction.Highlight : DragAction.MoveWindow;
+    private HighlighterTool StrokeFor(ModifierKeys modifiers) =>
+        (modifiers & ModifierKeys.Shift) != 0 ? Pen : (modifiers & ModifierKeys.Control) != 0 && Tool != DrawingTool.Pen ? Highlighter : Stroke;
     public ImageViewport(ImageDocument document)
     {
         this.document = document;
@@ -71,7 +89,7 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
     }
     public void ToggleFit() { if (Zoom.IsFit) ActualSize(); else Fit(); }
     public void Refresh() { InvalidateVisual(); ViewChanged?.Invoke(); }
-    public void SetTool(DrawingTool tool) { CancelInteraction(); Tool = tool; UpdateCursor(); Refresh(); }
+    public void SetTool(DrawingTool tool) { CancelInteraction(); selectedText = null; Tool = tool; UpdateCursor(); Refresh(); }
     public void ToggleHighlighter() => SetTool(Tool == DrawingTool.Highlighter ? DrawingTool.None : DrawingTool.Highlighter);
     public void TogglePen() => SetTool(Tool == DrawingTool.Pen ? DrawingTool.None : DrawingTool.Pen);
     public void ToggleText() => SetTool(Tool == DrawingTool.Text ? DrawingTool.None : DrawingTool.Text);
@@ -82,13 +100,31 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         switch (Tool)
         {
             case DrawingTool.Pen: Pen.Color = color; break;
-            case DrawingTool.Text: TextColor = color; break;
+            case DrawingTool.Text: TextColor = color; ReplaceSelected(label => label.Recoloured(color)); break;
             default: Highlighter.Color = color; if (Tool == DrawingTool.None) Tool = DrawingTool.Highlighter; break;
         }
         UpdateCursor(); Refresh();
     }
     public Color ToolColor => Tool switch { DrawingTool.Pen => Pen.Color, DrawingTool.Text => TextColor, _ => Highlighter.Color };
-    public void ChangeWidth(int direction) { Stroke.ChangeWidth(direction); Refresh(); }
+    /// Thinner or thicker for the pens; smaller or larger for the labels, which
+    /// also resizes the one picked out, so a label can be adjusted after writing.
+    public void ChangeWidth(int direction)
+    {
+        if (Tool == DrawingTool.Text)
+        {
+            TextSize = Math.Clamp(TextSize + direction * 2, 8, 200);
+            ReplaceSelected(label => label.Resized(TextSize));
+        }
+        else Stroke.ChangeWidth(direction);
+        Refresh();
+    }
+    private void ReplaceSelected(Func<TextAnnotation, TextAnnotation> change)
+    {
+        if (selectedText == null) return;
+        var next = change(selectedText);
+        document.Replace(selectedText, next);
+        selectedText = next;
+    }
     /// The label the window's editor just finished, in image pixels.
     public void AddText(Point origin, string text)
     {
@@ -96,6 +132,8 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         document.Add(new TextAnnotation(text, origin, TextColor, TextSize));
         Refresh();
     }
+    /// Picks out the label at that point, as clicking it with the label tool does.
+    public TextAnnotation? SelectText(Point image) { selectedText = TextAt(image); Refresh(); return selectedText; }
     private TextAnnotation? TextAt(Point image)
     {
         for (int i = document.Annotations.Count - 1; i >= 0; i--)
@@ -103,7 +141,7 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         return null;
     }
     private bool Inside(Point image) => new Rect(0, 0, document.Width, document.Height).Contains(image);
-    public void UpdateCursor() => Cursor = heldText != null ? Cursors.SizeAll : Stroke.IsDrawing ? Cursors.Pen : panning ? Cursors.Hand
+    public void UpdateCursor() => Cursor = heldText != null ? Cursors.SizeAll : drawing != null ? Cursors.Pen : panning ? Cursors.Hand
         : ResolveDrag(Tool is DrawingTool.Highlighter or DrawingTool.Pen, Keyboard.Modifiers, Keyboard.IsKeyDown(Key.Space)) switch
         {
             DragAction.PanImage => Cursors.Hand,
@@ -123,14 +161,34 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         dc.PushTransform(new MatrixTransform(Zoom.Matrix));
         dc.DrawImage(document.Image, new Rect(0, 0, document.Width, document.Height));
         // A label being dragged is drawn where it is going, not where it was.
-        DrawingLayer.Render(dc, document, draggedText ?? Stroke.Preview, heldText);
+        DrawingLayer.Render(dc, document, draggedText ?? drawing?.Preview, heldText);
+        if (Tool == DrawingTool.Text) RenderLabelEdges(dc);
         dc.Pop();
+    }
+    /// Only on screen, never in the exported image: every label is outlined while
+    /// the label tool is in hand, and the one picked out is outlined solidly.
+    private void RenderLabelEdges(DrawingContext dc)
+    {
+        double scale = 1 / Math.Max(0.05, Zoom.ViewScale);
+        var edge = LabelEdge.Clone(); edge.Thickness = LabelEdge.Thickness * scale; edge.Freeze();
+        var picked = SelectedEdge.Clone(); picked.Thickness = SelectedEdge.Thickness * scale; picked.Freeze();
+        foreach (var annotation in document.Annotations)
+        {
+            if (annotation is not TextAnnotation label || ReferenceEquals(label, heldText)) continue;
+            var bounds = label.Bounds; bounds.Inflate(3 * scale, 2 * scale);
+            dc.DrawRectangle(null, ReferenceEquals(label, selectedText) ? picked : edge, bounds);
+        }
+        if (draggedText != null)
+        {
+            var bounds = draggedText.Bounds; bounds.Inflate(3 * scale, 2 * scale);
+            dc.DrawRectangle(null, picked, bounds);
+        }
     }
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         e.Handled = true;
         if (IsInteracting) return;
-        if (Tool != DrawingTool.Text && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && Tool != DrawingTool.None) { ChangeWidth(Math.Sign(e.Delta)); return; }
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0 && Tool != DrawingTool.None) { ChangeWidth(Math.Sign(e.Delta)); return; }
         ZoomAt(e.Delta, e.GetPosition(this));
     }
     internal void ZoomAt(int delta, Point anchor)
@@ -150,15 +208,19 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         {
             var target = Zoom.ToImage(point);
             var label = TextAt(target);
-            if (label != null) { heldText = label; textGrab = target; CaptureMouse(); UpdateCursor(); e.Handled = true; return; }
-            if (Inside(target)) { TextRequested?.Invoke(target); e.Handled = true; return; }
+            if (label != null)
+            {
+                selectedText = label; heldText = label; textGrab = target;
+                CaptureMouse(); UpdateCursor(); Refresh(); e.Handled = true; return;
+            }
+            if (Inside(target)) { selectedText = null; TextRequested?.Invoke(target); Refresh(); e.Handled = true; return; }
         }
         if (e.ClickCount == 2 && action == DragAction.MoveWindow) { ToggleFit(); e.Handled = true; return; }
         if (action == DragAction.MoveWindow) { e.Handled = true; Window.GetWindow(this)?.DragMove(); return; }
         if (action == DragAction.Highlight)
         {
             var target = Zoom.ToImage(point);
-            if (Inside(target)) { Stroke.Begin(target); CaptureMouse(); Refresh(); }
+            if (Inside(target)) { drawing = StrokeFor(Keyboard.Modifiers); drawing.Begin(target); CaptureMouse(); Refresh(); }
             e.Handled = true; return;
         }
         panning = true; previous = point; CaptureMouse(); e.Handled = true;
@@ -171,9 +233,9 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
             draggedText = heldText.Moved(Zoom.ToImage(e.GetPosition(this)) - textGrab);
             InvalidateVisual(); return;
         }
-        if (Stroke.IsDrawing)
+        if (drawing != null)
         {
-            Stroke.Add(Zoom.ToImage(e.GetPosition(this)), Math.Max(0.2, 0.75 / Zoom.ViewScale));
+            drawing.Add(Zoom.ToImage(e.GetPosition(this)), Math.Max(0.2, 0.75 / Zoom.ViewScale));
             InvalidateVisual(); return;
         }
         if (!panning) return;
@@ -185,27 +247,27 @@ public sealed class ImageViewport : FrameworkElement, IDisposable
         {
             var (held, dragged) = (heldText, draggedText);
             heldText = null; draggedText = null; ReleaseMouseCapture();
-            if (dragged != null) document.Replace(held, dragged);
+            if (dragged != null) { document.Replace(held, dragged); selectedText = dragged; }
             e.Handled = true; UpdateCursor(); Refresh(); return;
         }
-        if (Stroke.IsDrawing)
+        if (drawing != null)
         {
-            Stroke.Add(Zoom.ToImage(e.GetPosition(this)), 0.01);
-            var stroke = Stroke.Finish();
+            drawing.Add(Zoom.ToImage(e.GetPosition(this)), 0.01);
+            var stroke = drawing.Finish(); drawing = null;
             if (stroke != null) document.Add(stroke);
         }
         panning = false; ReleaseMouseCapture(); e.Handled = true; UpdateCursor(); Refresh();
     }
     protected override void OnLostMouseCapture(MouseEventArgs e)
     {
-        panning = false; Highlighter.Cancel(); Pen.Cancel(); heldText = null; draggedText = null;
+        panning = false; Highlighter.Cancel(); Pen.Cancel(); drawing = null; heldText = null; draggedText = null;
         InvalidateVisual(); base.OnLostMouseCapture(e);
     }
     public void CancelInteraction()
     {
-        panning = false; Highlighter.Cancel(); Pen.Cancel(); heldText = null; draggedText = null;
+        panning = false; Highlighter.Cancel(); Pen.Cancel(); drawing = null; heldText = null; draggedText = null;
         ReleaseMouseCapture(); Refresh();
     }
-    public void CancelMode() { CancelInteraction(); Tool = DrawingTool.None; UpdateCursor(); Refresh(); }
+    public void CancelMode() { CancelInteraction(); selectedText = null; Tool = DrawingTool.None; UpdateCursor(); Refresh(); }
     public void Dispose() { document.Changed -= Refresh; CancelMode(); ViewChanged = null; ZoomSizeChanged = null; TextRequested = null; }
 }

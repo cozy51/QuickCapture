@@ -109,6 +109,7 @@ public sealed class TextAnnotation : IAnnotation
     public bool Contains(Point point) => Bounds.Contains(point);
     public TextAnnotation Moved(Vector delta) => new(Text, Origin + delta, Color, FontSize);
     public TextAnnotation Recoloured(Color color) => new(Text, Origin, color, FontSize);
+    public TextAnnotation Resized(double fontSize) => new(Text, Origin, Color, fontSize);
     public void Render(DrawingContext context)
     {
         context.DrawGeometry(null, halo, glyphs);

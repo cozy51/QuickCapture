@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace QuickCapture.Controls;
 
@@ -14,7 +16,9 @@ public sealed class CaptureToolbar : Border
     private readonly Button pen;
     private readonly Button text;
     private readonly Button undo;
-    private readonly List<(Border Swatch, Color Color)> swatches = new();
+    private readonly Ellipse colourDot;
+    private readonly ContextMenu colours = new();
+    private readonly List<(MenuItem Item, Color Color)> choices = new();
     public CaptureToolbar(Action move, Action copy, Action highlight, Action drawPen, Action addText, Action undoAction, Action actual, Action fit, Action save, Action close, Action<Color> pickColor)
     {
         Background = new SolidColorBrush(Color.FromArgb(237, 29, 33, 41));
@@ -26,21 +30,35 @@ public sealed class CaptureToolbar : Border
         grip.MouseLeftButtonDown += (_, e) => { move(); e.Handled = true; }; panel.Children.Add(grip);
         Add("⧉", "コピー · Ctrl+C", copy);
         highlighter = Add("H", "蛍光ペン · H / Ctrl＋ドラッグ", highlight);
-        pen = Add("✎", "ペン · P", drawPen);
-        text = Add("T", "テキスト · X / クリックで入力、文字をドラッグで移動", addText);
-        // The colours change whichever tool is in hand, so they sit beside them.
+        pen = Add("✎", "ペン · P / Shift＋ドラッグ", drawPen);
+        text = Add("T", "テキスト · X / クリックで入力 · 文字をクリックで選択、ドラッグで移動、[ ]で大きさ", addText);
+        // One button, not a row of dots: it shows the colour in hand and drops the
+        // palette down when asked, so the bar stays narrow.
+        colourDot = new Ellipse { Width = 15, Height = 15, Stroke = Brushes.White, StrokeThickness = 1, VerticalAlignment = VerticalAlignment.Center };
+        var arrow = new TextBlock { Text = "▾", Foreground = Brushes.White, FontSize = 10, Margin = new Thickness(3, 0, 0, 1), VerticalAlignment = VerticalAlignment.Center };
+        var face = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        face.Children.Add(colourDot); face.Children.Add(arrow);
+        var picker = new Border
+        {
+            Width = 40, Height = 29, Margin = new Thickness(1), CornerRadius = new CornerRadius(4),
+            Background = Brushes.Transparent, Cursor = Cursors.Hand, Child = face, ToolTip = "色 · 今のツールに使う色を選ぶ"
+        };
+        var lit = new SolidColorBrush(Color.FromRgb(65, 73, 86)); lit.Freeze();
+        picker.MouseEnter += (_, _) => picker.Background = lit;
+        picker.MouseLeave += (_, _) => picker.Background = Brushes.Transparent;
+        picker.MouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            colours.PlacementTarget = picker; colours.Placement = PlacementMode.Bottom; colours.IsOpen = true;
+        };
         foreach (var (name, hex) in DrawingPalette.Colors)
         {
             var value = DrawingPalette.Parse(hex);
-            var swatch = new Border
-            {
-                Width = 18, Height = 18, CornerRadius = new CornerRadius(9), Margin = new Thickness(2, 5, 2, 5),
-                Background = new SolidColorBrush(value), BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent,
-                Cursor = Cursors.Hand, ToolTip = $"{name} · 今のツールの色にする"
-            };
-            swatch.MouseLeftButtonDown += (_, e) => { e.Handled = true; pickColor(value); };
-            panel.Children.Add(swatch); swatches.Add((swatch, value));
+            var choice = new MenuItem { Header = name, Icon = new Ellipse { Width = 12, Height = 12, Fill = new SolidColorBrush(value) } };
+            choice.Click += (_, _) => pickColor(value);
+            colours.Items.Add(choice); choices.Add((choice, value));
         }
+        panel.Children.Add(picker);
         undo = Add("↶", "元に戻す · Ctrl+Z", undoAction);
         Add("1:1", "等倍 · 1 / Ctrl+0", actual);
         Add("Fit", "全体を表示 · F", fit);
@@ -66,8 +84,10 @@ public sealed class CaptureToolbar : Border
         highlighter.Foreground = tool == DrawingTool.Highlighter ? active : Brushes.White;
         pen.Foreground = tool == DrawingTool.Pen ? active : Brushes.White;
         text.Foreground = tool == DrawingTool.Text ? active : Brushes.White;
-        foreach (var (swatch, value) in swatches)
-            swatch.BorderBrush = tool != DrawingTool.None && value == color ? Brushes.White : Brushes.Transparent;
+        colourDot.Fill = active;
+        colourDot.Opacity = tool == DrawingTool.None ? 0.5 : 1;
+        foreach (var (choice, value) in choices)
+            choice.FontWeight = value == color ? FontWeights.Bold : FontWeights.Normal;
         undo.Opacity = canUndo ? 1 : 0.35; undo.IsEnabled = canUndo;
     }
 }
