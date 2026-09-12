@@ -551,7 +551,7 @@ public sealed class CaptureWindow : Window
     {
         // A mode key the IME did not take (it arrives as ImeProcessed when it did)
         // is ours to act on, so 半角/全角 switches Japanese input either way.
-        if (e.Key is Key.KanjiMode or Key.OemAuto or Key.OemEnlW or Key.ImeModeChange
+        if (e.Key is Key.KanjiMode or Key.OemAuto or Key.OemEnlw or Key.ImeModeChange
             || (e.Key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
         { e.Handled = true; ToggleIme(); return; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
