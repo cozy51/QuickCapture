@@ -33,7 +33,7 @@ public sealed class SettingsWindow : Window
         var topmost = new CheckBox { Content = "新しい画像を常に手前に表示", IsChecked = settings.AlwaysOnTop, Margin = new Thickness(0, 18, 0, 10) }; panel.Children.Add(topmost);
         var annotations = new CheckBox { Content = "コピーにマーキングを含める", IsChecked = settings.CopyIncludesAnnotations, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(annotations);
         var exportBorder = new CheckBox { Content = "コピー・PNG保存画像に薄いグレーの外枠を付ける", IsChecked = settings.ExportBorderEnabled, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(exportBorder);
-        var exportHeader = new CheckBox { Content = "コピー・PNG保存画像に上部の情報バーを含める", IsChecked = settings.ExportHeaderEnabled, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(exportHeader);
+        var exportHeader = new CheckBox { Content = "コピー・PNG保存画像に上部のカウンターと日時情報を含める", IsChecked = settings.ExportHeaderEnabled, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(exportHeader);
         var close = new CheckBox { Content = "コピー成功後に画像ウィンドウを閉じる", IsChecked = settings.CloseAfterCopy }; panel.Children.Add(close);
         var autoClose = new CheckBox { Content = "新しいキャプチャを3秒で閉じる", IsChecked = settings.AutoCloseCaptures, Margin = new Thickness(0, 10, 0, 0) }; panel.Children.Add(autoClose);
         var error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) }; panel.Children.Add(error);

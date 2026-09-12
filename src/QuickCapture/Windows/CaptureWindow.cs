@@ -42,6 +42,8 @@ public sealed class CaptureWindow : Window
     private bool textEditorHeldTopmost;
     /// Set while the editor is retyping a label that is already on the picture.
     private bool retyping;
+    /// Japanese input, on for the first label and then as the writer last left it.
+    private bool imeOn = true;
     private readonly Border status;
     private readonly TextBlock statusText;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -118,7 +120,6 @@ public sealed class CaptureWindow : Window
         // of the picture, so the editor turns the always-on-top state off while it is
         // open, and asks for the IME to be switched on as soon as it takes focus.
         InputMethod.SetIsInputMethodEnabled(textEditor, true);
-        InputMethod.SetPreferredImeState(textEditor, InputMethodState.On);
         InputMethod.SetPreferredImeConversionMode(textEditor, ImeConversionModeValues.Native | ImeConversionModeValues.FullShape);
         textEditor.PreviewKeyDown += TextEditorKey;
         // Focus leaving for another control finishes the label; focus leaving the
@@ -212,7 +213,7 @@ public sealed class CaptureWindow : Window
     {
         try { setExportHeader(enabled); }
         catch (Exception ex) { SetExportHeader(enabled); ShowStatus("設定を保存できません: " + ex.Message); return; }
-        _ = CopyAsync(false, enabled ? "上部バー付きでコピーし直しました" : "画像だけでコピーし直しました");
+        _ = CopyAsync(false, enabled ? "カウンターと日時情報を含めてコピーし直しました" : "画像だけでコピーし直しました");
     }
     /// The header of this window as copy and save should record it, or null while
     /// the export is the image alone.
@@ -508,22 +509,31 @@ public sealed class CaptureWindow : Window
         {
             if (closed || textEditor.Visibility != Visibility.Visible) return;
             if (!textEditor.IsKeyboardFocusWithin) { textEditor.Focus(); Keyboard.Focus(textEditor); }
-            TurnImeOn();
+            ApplyIme(imeOn);
         });
-        ShowStatus("文字を入力（日本語入力ON · 半角/全角で切替） · Enterで確定 · Shift+Enterで改行 · Escで取り消し");
+        ShowStatus($"文字を入力（日本語入力{(imeOn ? "ON" : "OFF")} · 半角/全角キーで切替） · Enterで確定 · Shift+Enterで改行 · Escで取り消し");
     }
     /// WPF asks for the IME through the focused element, but a window whose IME
-    /// context was dropped along the way ignores that and the mode key alike. Put
-    /// the default context back on the window and open the IME there as well.
-    private void TurnImeOn()
+    /// context was dropped along the way ignores that and the mode key alike, so
+    /// the editor puts the default context back and sets the state itself.
+    private void ApplyIme(bool on)
     {
         try
         {
-            InputMethod.Current.ImeState = InputMethodState.On;
-            if (!NativeMethods.TurnImeOn(new WindowInteropHelper(this).Handle))
-                ShowStatus("日本語入力を開けませんでした · 半角/全角キー、またはCtrl+Vでの貼り付けをお試しください");
+            InputMethod.SetPreferredImeState(textEditor, on ? InputMethodState.On : InputMethodState.Off);
+            InputMethod.Current.ImeState = on ? InputMethodState.On : InputMethodState.Off;
+            if (!NativeMethods.SetIme(new WindowInteropHelper(this).Handle, on) && on)
+                ShowStatus("日本語入力を開けませんでした · Ctrl+Vでの貼り付けをお試しください");
         }
-        catch (Exception ex) { ShowStatus("日本語入力を有効にできません: " + ex.Message); }
+        catch (Exception ex) { ShowStatus("日本語入力を切り替えられません: " + ex.Message); }
+    }
+    /// The mode key does not always reach the IME through WPF here, so the editor
+    /// switches Japanese input on and off itself and remembers the choice.
+    private void ToggleIme()
+    {
+        imeOn = !NativeMethods.IsImeOn(new WindowInteropHelper(this).Handle);
+        ApplyIme(imeOn);
+        ShowStatus(imeOn ? "日本語入力 ON（半角/全角キーで切替）" : "日本語入力 OFF · 英数（半角/全角キーで切替）");
     }
     /// A label was double clicked: open the editor on its own text, colour and
     /// size, and put what comes out back in its place.
@@ -539,6 +549,11 @@ public sealed class CaptureWindow : Window
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
+        // A mode key the IME did not take (it arrives as ImeProcessed when it did)
+        // is ours to act on, so 半角/全角 switches Japanese input either way.
+        if (e.Key is Key.KanjiMode or Key.OemAuto or Key.OemEnlW or Key.ImeModeChange
+            || (e.Key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
+        { e.Handled = true; ToggleIme(); return; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
         else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0) { e.Handled = true; CommitText(); }
     }
@@ -596,14 +611,15 @@ public sealed class CaptureWindow : Window
             item.Click += (_, _) => action(); menu.Items.Add(item);
         }
         Add("閉じる", "Delete", Close);
-        var autoClose = new MenuItem { Header = "この画像から3秒で閉じる", InputGestureText = "T", IsCheckable = true };
+        // The two switches used most often are set in bold so they stand out.
+        var autoClose = new MenuItem { Header = "この画像から3秒で閉じる", InputGestureText = "T", IsCheckable = true, FontWeight = FontWeights.Bold };
         autoClose.Click += (_, _) => { SetNextCapturesAutoClose(autoClose.IsChecked); autoClose.IsChecked = AutoCloseEnabled; }; menu.Items.Add(autoClose);
         var retain = new MenuItem { Header = "この画像から自動終了をやめる" };
         retain.Click += (_, _) => SetNextCapturesAutoClose(false); menu.Items.Add(retain);
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
         Add("PNGで保存…", "Ctrl+S", Save);
-        var exportHeader = new MenuItem { Header = "コピー・保存に上部バーを含める", IsCheckable = true };
+        var exportHeader = new MenuItem { Header = "コピー対象に上部のカウンターと日時情報を含める", IsCheckable = true, FontWeight = FontWeights.Bold };
         exportHeader.Click += (_, _) => SetExportHeaderMode(exportHeader.IsChecked);
         menu.Items.Add(exportHeader);
         menu.Items.Add(new Separator());

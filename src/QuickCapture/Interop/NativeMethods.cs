@@ -66,13 +66,22 @@ internal static class NativeMethods
     /// Hand the window back the default IME context and switch the IME on. A
     /// window whose context was dropped takes plain keys and pasted text but
     /// refuses the mode key, which is what stops Japanese from being typed.
-    internal static bool TurnImeOn(IntPtr window)
+    internal static bool SetIme(IntPtr window, bool on)
     {
         if (window == IntPtr.Zero) return false;
         ImmAssociateContextEx(window, IntPtr.Zero, 0x0010); // IACE_DEFAULT
         var context = ImmGetContext(window);
         if (context == IntPtr.Zero) return false;
-        try { return ImmSetOpenStatus(context, true) && ImmGetOpenStatus(context); }
+        try { ImmSetOpenStatus(context, on); return ImmGetOpenStatus(context) == on; }
+        finally { ImmReleaseContext(window, context); }
+    }
+    /// True when the IME is open for this window.
+    internal static bool IsImeOn(IntPtr window)
+    {
+        if (window == IntPtr.Zero) return false;
+        var context = ImmGetContext(window);
+        if (context == IntPtr.Zero) return false;
+        try { return ImmGetOpenStatus(context); }
         finally { ImmReleaseContext(window, context); }
     }
     internal static Point CursorPosition()

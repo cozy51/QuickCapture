@@ -614,7 +614,7 @@ internal static class Program
         MenuItem Mode(CaptureWindow window)
         {
             window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
-            return window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "コピー・保存に上部バーを含める");
+            return window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "コピー対象に上部のカウンターと日時情報を含める");
         }
         void SetMode(CaptureWindow window, bool enabled)
         {
