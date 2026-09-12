@@ -196,7 +196,14 @@ public sealed class CaptureWindow : Window
         };
         IsVisibleChanged += (_, _) => CaptureWindowRegistry.Refresh();
         StateChanged += (_, _) => CaptureWindowRegistry.Refresh();
-        Deactivated += (_, _) => { viewport.CancelInteraction(); toolbar.Visibility = Visibility.Collapsed; frame.CancelPointer(); };
+        Deactivated += (_, _) =>
+        {
+            viewport.CancelInteraction(); toolbar.Visibility = Visibility.Collapsed; frame.CancelPointer();
+            // Another application has the keyboard now; a watch spanning the whole
+            // system has no business being in place while it does.
+            StopWatchingSystemKeys();
+        };
+        Activated += (_, _) => { if (!closed && textEditorRow.Visibility == Visibility.Visible) WatchModeKey(); };
         Closed += (_, _) =>
         {
             closed = true; StopWatchingModeKey();
@@ -577,9 +584,12 @@ public sealed class CaptureWindow : Window
     /// VK_IME_ON / VK_KANJI / VK_IME_OFF / VK_MODECHANGE and the DBE block: the
     /// codes a Japanese keyboard sends for turning Japanese input over.
     private static bool IsImeModeKey(int key) => key is 0x16 or 0x19 or 0x1A or 0x1F or (>= 0xF0 and <= 0xF5);
-    /// WH_KEYBOARD on this thread and WH_KEYBOARD_LL below it, for as long as the
-    /// editor is open. The low one sees the key before Windows offers it to the
-    /// IME, which is the only place a mode key the IME swallows can be caught.
+    /// WH_KEYBOARD on this thread for as long as the editor is open, and
+    /// WH_KEYBOARD_LL below it only while this window is also the one in front.
+    /// The low one sees the key before Windows offers it to the IME, which is the
+    /// only place a mode key the IME swallows can be caught — but it spans every
+    /// application, so it is let go of again as soon as the window is deactivated
+    /// and, while it is in place, acts on nothing that is not typed in here.
     private void WatchModeKey()
     {
         if (modeKeyHook == IntPtr.Zero)
@@ -587,7 +597,7 @@ public sealed class CaptureWindow : Window
             modeKeyWatcher = ModeKeyPressed;
             modeKeyHook = NativeMethods.SetWindowsHookEx(2, modeKeyWatcher, IntPtr.Zero, NativeMethods.GetCurrentThreadId());
         }
-        if (systemKeyHook == IntPtr.Zero)
+        if (systemKeyHook == IntPtr.Zero && IsActive)
         {
             systemKeyWatcher = SystemKeyPressed;
             systemKeyHook = NativeMethods.SetWindowsHookEx(13, systemKeyWatcher, NativeMethods.GetModuleHandle(null), 0);
@@ -598,22 +608,42 @@ public sealed class CaptureWindow : Window
     private void StopWatchingModeKey()
     {
         if (modeKeyHook != IntPtr.Zero) { NativeMethods.UnhookWindowsHookEx(modeKeyHook); modeKeyHook = IntPtr.Zero; modeKeyWatcher = null; }
+        StopWatchingSystemKeys();
+    }
+    /// Let go of the watch that spans the whole system, leaving the one limited to
+    /// this thread in place: nothing outside this app can be touched either way,
+    /// and an editor that is still open keeps working when the window comes back.
+    private void StopWatchingSystemKeys()
+    {
         if (systemKeyHook != IntPtr.Zero) { NativeMethods.UnhookWindowsHookEx(systemKeyHook); systemKeyHook = IntPtr.Zero; systemKeyWatcher = null; }
     }
     /// WM_KEYDOWN / WM_SYSKEYDOWN as the keyboard sent it: the mode key is here
-    /// even when the IME takes it before any window sees it.
+    /// even when the IME takes it before any window sees it. This watch spans the
+    /// whole system, so every key it is not certain belongs to the editor in front
+    /// is passed straight on — swallowing one would take the mode key away from
+    /// whichever application the user is really typing in.
     private IntPtr SystemKeyPressed(int code, IntPtr wParam, IntPtr lParam)
     {
-        if (code >= 0 && (wParam.ToInt64() == 0x0100 || wParam.ToInt64() == 0x0104) && textEditorRow.Visibility == Visibility.Visible)
+        if (code >= 0 && (wParam.ToInt64() == 0x0100 || wParam.ToInt64() == 0x0104) && TypingHere())
         {
             var pressed = Marshal.PtrToStructure<NativeMethods.KEYBOARDHOOK>(lParam);
             if (IsImeModeKey((int)pressed.Key))
             {
                 ToggleIme("半角/全角キー");
-                return new IntPtr(1); // Taken here, so nothing else acts on it.
+                return new IntPtr(1); // Taken here, so the IME does not act on it too.
             }
         }
         return NativeMethods.CallNextHookEx(systemKeyHook, code, wParam, lParam);
+    }
+    /// True only while the keyboard is talking to this window's open label editor.
+    /// Everything the system-wide watch sees outside that belongs to another
+    /// application and must be left alone.
+    private bool TypingHere()
+    {
+        if (closed || textEditorRow.Visibility != Visibility.Visible) return false;
+        if (!textEditor.IsKeyboardFocusWithin) return false;
+        var mine = new WindowInteropHelper(this).Handle;
+        return mine != IntPtr.Zero && NativeMethods.GetForegroundWindow() == mine;
     }
     private IntPtr ModeKeyPressed(int code, IntPtr wParam, IntPtr lParam)
     {
