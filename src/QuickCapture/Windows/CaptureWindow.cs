@@ -38,12 +38,18 @@ public sealed class CaptureWindow : Window
     private readonly ClipboardService clipboard = new();
     private readonly CaptureToolbar toolbar;
     private readonly TextBox textEditor;
+    /// The editor and its あ/A switch travel together over the picture.
+    private readonly StackPanel textEditorRow;
+    private readonly Border imeSwitch;
+    private readonly TextBlock imeSwitchLabel;
     private Point textOrigin;
     private bool textEditorHeldTopmost;
     /// Set while the editor is retyping a label that is already on the picture.
     private bool retyping;
     /// Japanese input, on for the first label and then as the writer last left it.
     private bool imeOn = true;
+    private readonly Brush imeOnBrush = new SolidColorBrush(Color.FromRgb(47, 123, 246));
+    private readonly Brush imeOffBrush = new SolidColorBrush(Color.FromRgb(96, 104, 116));
     private readonly Border status;
     private readonly TextBlock statusText;
     private readonly DispatcherTimer statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -122,10 +128,26 @@ public sealed class CaptureWindow : Window
         InputMethod.SetIsInputMethodEnabled(textEditor, true);
         InputMethod.SetPreferredImeConversionMode(textEditor, ImeConversionModeValues.Native | ImeConversionModeValues.FullShape);
         textEditor.PreviewKeyDown += TextEditorKey;
+        // A switch that takes a mouse click, because the mode key does not always
+        // reach the IME: it says which mode is on and turns it over when pressed.
+        imeSwitchLabel = new TextBlock { Text = "あ", Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.SemiBold };
+        imeSwitch = new Border
+        {
+            CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 3, 7, 3), Margin = new Thickness(4, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Child = imeSwitchLabel,
+            ToolTip = "日本語入力のON/OFF · 半角/全角キー / Ctrl+Space"
+        };
+        imeSwitch.MouseLeftButtonDown += (_, e) => { e.Handled = true; ToggleIme(); textEditor.Focus(); };
+        textEditorRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed,
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
+        };
+        textEditorRow.Children.Add(textEditor); textEditorRow.Children.Add(imeSwitch);
         // Focus leaving for another control finishes the label; focus leaving the
         // application (the IME candidate window) must not close the editor.
         textEditor.LostKeyboardFocus += (_, e) => { if (e.NewFocus != null) CommitText(); };
-        grid.Children.Add(textEditor);
+        grid.Children.Add(textEditorRow);
         statusText = new TextBlock { Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap };
         status = new Border { Background = new SolidColorBrush(Color.FromArgb(220, 29, 33, 41)), CornerRadius = new CornerRadius(5), Padding = new Thickness(8, 5, 8, 5), Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Child = statusText, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         grid.Children.Add(status);
@@ -471,7 +493,7 @@ public sealed class CaptureWindow : Window
     private void PickColor(Color color)
     {
         viewport.SetColor(color);
-        if (textEditor.Visibility == Visibility.Visible) textEditor.Foreground = new SolidColorBrush(viewport.TextColor);
+        if (textEditorRow.Visibility == Visibility.Visible) textEditor.Foreground = new SolidColorBrush(viewport.TextColor);
         SaveDrawing();
     }
     private void ChangeWidth(int direction) { viewport.ChangeWidth(direction); SaveDrawing(); }
@@ -493,31 +515,35 @@ public sealed class CaptureWindow : Window
         CommitText();
         textOrigin = origin;
         var at = viewport.Zoom.ToViewport(origin);
-        textEditor.Margin = new Thickness(Math.Max(0, at.X - 4), Math.Max(0, at.Y - 4), 0, 0);
+        textEditorRow.Margin = new Thickness(Math.Max(0, at.X - 4), Math.Max(0, at.Y - 4), 0, 0);
         textEditor.FontSize = Math.Max(8, viewport.TextSize * viewport.Zoom.ViewScale);
         var ink = new SolidColorBrush(viewport.TextColor); ink.Freeze();
         textEditor.Foreground = ink; textEditor.BorderBrush = ink; textEditor.CaretBrush = ink;
         textEditor.Text = string.Empty; retyping = false;
-        textEditor.Visibility = Visibility.Visible;
+        textEditorRow.Visibility = Visibility.Visible;
         if (Topmost) { textEditorHeldTopmost = true; Topmost = false; }
         if (!IsActive) Activate();
         // A box that has just become visible is not arranged yet, and focus put on
         // it before that does not stick — which is what keeps the IME away.
-        textEditor.UpdateLayout();
+        textEditorRow.UpdateLayout();
         textEditor.Focus(); Keyboard.Focus(textEditor);
         Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
         {
-            if (closed || textEditor.Visibility != Visibility.Visible) return;
+            if (closed || textEditorRow.Visibility != Visibility.Visible) return;
             if (!textEditor.IsKeyboardFocusWithin) { textEditor.Focus(); Keyboard.Focus(textEditor); }
             ApplyIme(imeOn);
+            textEditor.CaretIndex = textEditor.Text.Length;
         });
-        ShowStatus($"文字を入力（日本語入力{(imeOn ? "ON" : "OFF")} · 半角/全角キーで切替） · Enterで確定 · Shift+Enterで改行 · Escで取り消し");
+        ShowStatus($"文字を入力（日本語入力{(imeOn ? "ON" : "OFF")} · 右の「あ/A」ボタン・半角/全角キー・Ctrl+Spaceで切替） · Enterで確定 · Escで取り消し");
     }
     /// WPF asks for the IME through the focused element, but a window whose IME
     /// context was dropped along the way ignores that and the mode key alike, so
     /// the editor puts the default context back and sets the state itself.
     private void ApplyIme(bool on)
     {
+        imeOn = on;
+        imeSwitchLabel.Text = on ? "あ" : "A";
+        imeSwitch.Background = on ? imeOnBrush : imeOffBrush;
         try
         {
             InputMethod.SetPreferredImeState(textEditor, on ? InputMethodState.On : InputMethodState.Off);
@@ -527,13 +553,18 @@ public sealed class CaptureWindow : Window
         }
         catch (Exception ex) { ShowStatus("日本語入力を切り替えられません: " + ex.Message); }
     }
-    /// The mode key does not always reach the IME through WPF here, so the editor
-    /// switches Japanese input on and off itself and remembers the choice.
+    /// Turn Japanese input over to the other mode. Whether the IME took the key
+    /// itself or ignored it, the state asked for is the one that ends up set, so
+    /// pressing again always switches back.
     private void ToggleIme()
     {
-        imeOn = !NativeMethods.IsImeOn(new WindowInteropHelper(this).Handle);
-        ApplyIme(imeOn);
-        ShowStatus(imeOn ? "日本語入力 ON（半角/全角キーで切替）" : "日本語入力 OFF · 英数（半角/全角キーで切替）");
+        bool wanted = !imeOn;
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (closed) return;
+            ApplyIme(wanted);
+            ShowStatus(wanted ? "日本語入力 ON（あ）" : "日本語入力 OFF · 英数（A）");
+        });
     }
     /// A label was double clicked: open the editor on its own text, colour and
     /// size, and put what comes out back in its place.
@@ -549,17 +580,19 @@ public sealed class CaptureWindow : Window
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
-        // A mode key the IME did not take (it arrives as ImeProcessed when it did)
-        // is ours to act on, so 半角/全角 switches Japanese input either way.
-        if (e.Key is Key.KanjiMode or Key.OemAuto or Key.OemEnlw or Key.ImeModeChange
-            || (e.Key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
+        // The IME takes the mode key for itself on some systems and ignores it on
+        // others; either way the pressed key is readable here, and the mode ends
+        // up as the press asked for rather than wherever the IME left it.
+        var key = e.Key == Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
+        if (key is Key.KanjiMode or Key.OemAuto or Key.OemEnlw or Key.ImeModeChange
+            || (key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
         { e.Handled = true; ToggleIme(); return; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
         else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0) { e.Handled = true; CommitText(); }
     }
     private void CommitText()
     {
-        if (textEditor.Visibility != Visibility.Visible) return;
+        if (textEditorRow.Visibility != Visibility.Visible) return;
         string text = textEditor.Text;
         bool edit = retyping;
         CloseTextEditor();
@@ -567,12 +600,12 @@ public sealed class CaptureWindow : Window
     }
     private void CancelText()
     {
-        if (textEditor.Visibility != Visibility.Visible) return;
+        if (textEditorRow.Visibility != Visibility.Visible) return;
         CloseTextEditor();
     }
     private void CloseTextEditor()
     {
-        textEditor.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty; retyping = false;
+        textEditorRow.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty; retyping = false;
         if (textEditorHeldTopmost) { Topmost = true; textEditorHeldTopmost = false; }
         if (!closed) viewport.Focus();
     }
@@ -614,8 +647,6 @@ public sealed class CaptureWindow : Window
         // The two switches used most often are set in bold so they stand out.
         var autoClose = new MenuItem { Header = "この画像から3秒で閉じる", InputGestureText = "T", IsCheckable = true, FontWeight = FontWeights.Bold };
         autoClose.Click += (_, _) => { SetNextCapturesAutoClose(autoClose.IsChecked); autoClose.IsChecked = AutoCloseEnabled; }; menu.Items.Add(autoClose);
-        var retain = new MenuItem { Header = "この画像から自動終了をやめる" };
-        retain.Click += (_, _) => SetNextCapturesAutoClose(false); menu.Items.Add(retain);
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
         Add("PNGで保存…", "Ctrl+S", Save);
@@ -655,7 +686,7 @@ public sealed class CaptureWindow : Window
             marker.IsChecked = viewport.Tool == DrawingTool.Highlighter;
             plain.IsChecked = viewport.Tool == DrawingTool.Pen;
             label.IsChecked = viewport.Tool == DrawingTool.Text;
-            autoClose.IsChecked = AutoCloseEnabled; retain.Visibility = AutoCloseEnabled ? Visibility.Visible : Visibility.Collapsed;
+            autoClose.IsChecked = AutoCloseEnabled;
             exportHeader.IsChecked = settings.ExportHeaderEnabled;
         };
         return menu;

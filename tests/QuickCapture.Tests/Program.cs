@@ -330,12 +330,6 @@ internal static class Program
             var item = Mode(window); item.IsChecked = enabled;
             item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         }
-        void Retain(CaptureWindow window)
-        {
-            window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
-            window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == "この画像から自動終了をやめる")
-                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        }
         try
         {
             var original = Create(); var peer = Create();
@@ -350,11 +344,11 @@ internal static class Program
             SetMode(peer, false);
             var retained = Create();
             Assert(!retained.AutoCloseEnabled && next.AutoCloseEnabled && following.AutoCloseEnabled, "Turning off frees that image and future captures, not the armed ones");
-            // Keeping an image also stops the mode for the captures that follow.
+            // Turning the switch off again keeps that image and the ones after it.
             SetMode(retained, true);
             var stays = Create();
             Assert(retained.AutoCloseEnabled && stays.AutoCloseEnabled && preferences.AutoCloseCaptures, "The mode is on again");
-            Retain(retained);
+            SetMode(retained, false);
             Assert(!retained.AutoCloseEnabled && !preferences.AutoCloseCaptures, "Keeping an image saves that for the captures that follow");
             var kept = Create();
             Assert(!kept.AutoCloseEnabled, "Captures taken after keeping an image stay on screen");
