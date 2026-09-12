@@ -55,6 +55,10 @@ public sealed class CaptureWindow : Window
     /// taken by the IME before any window sees it, and this runs earlier still.
     private IntPtr modeKeyHook;
     private NativeMethods.HookProc? modeKeyWatcher;
+    /// The same watch one level lower, where the key is seen before Windows hands
+    /// it to the IME at all. Only in place while a label is being typed.
+    private IntPtr systemKeyHook;
+    private NativeMethods.HookProc? systemKeyWatcher;
     private readonly Brush imeOnBrush = new SolidColorBrush(Color.FromRgb(47, 123, 246));
     private readonly Brush imeOffBrush = new SolidColorBrush(Color.FromRgb(96, 104, 116));
     private readonly Border status;
@@ -142,7 +146,7 @@ public sealed class CaptureWindow : Window
         {
             CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 3, 7, 3), Margin = new Thickness(4, 0, 0, 0),
             Background = imeOnBrush, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Child = imeSwitchLabel,
-            ToolTip = "日本語入力のON/OFF · 半角/全角キー / Ctrl+Space"
+            ToolTip = "日本語入力のON/OFF · 半角/全角キー / F2 / Ctrl+Space"
         };
         imeSwitch.MouseLeftButtonDown += (_, e) => { e.Handled = true; ToggleIme(); textEditor.Focus(); };
         textEditorRow = new StackPanel
@@ -464,7 +468,7 @@ public sealed class CaptureWindow : Window
     {
         // While a label is being typed the keys belong to the text box, except the
         // one that turns Japanese input over.
-        if (textEditorRow.Visibility == Visibility.Visible && IsImeModeKey(e)) { e.Handled = true; ToggleIme("キー"); return; }
+        if (textEditorRow.Visibility == Visibility.Visible && (IsImeModeKey(e) || e.Key == Key.F2)) { e.Handled = true; ToggleIme("キー"); return; }
         if (textEditor.IsKeyboardFocusWithin) return;
         viewport.UpdateCursor();
         var modifiers = Keyboard.Modifiers;
@@ -549,7 +553,7 @@ public sealed class CaptureWindow : Window
             ApplyIme(imeOn);
             textEditor.CaretIndex = textEditor.Text.Length;
         });
-        ShowStatus($"文字を入力（日本語入力{(imeOn ? "ON" : "OFF")} · 右の「あ/A」ボタン・半角/全角キー・Ctrl+Spaceで切替） · Enterで確定 · Escで取り消し");
+        ShowStatus($"文字を入力（日本語入力{(imeOn ? "ON" : "OFF")} · 「あ/A」ボタン・半角/全角・F2・Ctrl+Spaceで切替） · Enterで確定 · Escで取り消し");
     }
     /// WPF asks for the IME through the focused element, but a window whose IME
     /// context was dropped along the way ignores that and the mode key alike, so
@@ -570,19 +574,50 @@ public sealed class CaptureWindow : Window
     }
     /// VK_KANJI, VK_MODECHANGE, VK_OEM_AUTO and VK_OEM_ENLW: the keys a keyboard
     /// offers for turning Japanese input over.
-    private static bool IsImeModeKey(int key) => key is 0x19 or 0x1F or (>= 0xF0 and <= 0xF5);
-    /// WH_KEYBOARD on this thread only, for as long as the editor is open.
+    /// VK_IME_ON / VK_KANJI / VK_IME_OFF / VK_MODECHANGE and the DBE block: the
+    /// codes a Japanese keyboard sends for turning Japanese input over.
+    private static bool IsImeModeKey(int key) => key is 0x16 or 0x19 or 0x1A or 0x1F or (>= 0xF0 and <= 0xF5);
+    /// WH_KEYBOARD on this thread and WH_KEYBOARD_LL below it, for as long as the
+    /// editor is open. The low one sees the key before Windows offers it to the
+    /// IME, which is the only place a mode key the IME swallows can be caught.
     private void WatchModeKey()
     {
-        if (modeKeyHook != IntPtr.Zero) return;
-        modeKeyWatcher = ModeKeyPressed;
-        modeKeyHook = NativeMethods.SetWindowsHookEx(2, modeKeyWatcher, IntPtr.Zero, NativeMethods.GetCurrentThreadId());
+        if (modeKeyHook == IntPtr.Zero)
+        {
+            modeKeyWatcher = ModeKeyPressed;
+            modeKeyHook = NativeMethods.SetWindowsHookEx(2, modeKeyWatcher, IntPtr.Zero, NativeMethods.GetCurrentThreadId());
+        }
+        if (systemKeyHook == IntPtr.Zero)
+        {
+            systemKeyWatcher = SystemKeyPressed;
+            systemKeyHook = NativeMethods.SetWindowsHookEx(13, systemKeyWatcher, NativeMethods.GetModuleHandle(null), 0);
+        }
+        if (modeKeyHook == IntPtr.Zero && systemKeyHook == IntPtr.Zero)
+            ShowStatus("キーの監視を開始できません · 「あ/A」ボタンで切り替えてください");
     }
     private void StopWatchingModeKey()
     {
-        if (modeKeyHook == IntPtr.Zero) return;
-        NativeMethods.UnhookWindowsHookEx(modeKeyHook);
-        modeKeyHook = IntPtr.Zero; modeKeyWatcher = null;
+        if (modeKeyHook != IntPtr.Zero) { NativeMethods.UnhookWindowsHookEx(modeKeyHook); modeKeyHook = IntPtr.Zero; modeKeyWatcher = null; }
+        if (systemKeyHook != IntPtr.Zero) { NativeMethods.UnhookWindowsHookEx(systemKeyHook); systemKeyHook = IntPtr.Zero; systemKeyWatcher = null; }
+    }
+    /// WM_KEYDOWN / WM_SYSKEYDOWN as the keyboard sent it: the mode key is here
+    /// even when the IME takes it before any window sees it.
+    private IntPtr SystemKeyPressed(int code, IntPtr wParam, IntPtr lParam)
+    {
+        if (code >= 0 && (wParam.ToInt64() == 0x0100 || wParam.ToInt64() == 0x0104) && textEditorRow.Visibility == Visibility.Visible)
+        {
+            var pressed = Marshal.PtrToStructure<NativeMethods.KEYBOARDHOOK>(lParam);
+            if (IsImeModeKey((int)pressed.Key))
+            {
+                ToggleIme("半角/全角キー");
+                return new IntPtr(1); // Taken here, so nothing else acts on it.
+            }
+            // A key only an IME keyboard sends, but not one this app knows: name it
+            // so the right code can be added rather than guessed at.
+            if (pressed.Key is (>= 0x15 and <= 0x1A) or (>= 0x1C and <= 0x1F) or (>= 0xF0 and <= 0xFF))
+                Dispatcher.BeginInvoke(() => ShowStatus($"キー 0x{pressed.Key:X2} を受け取りました（切替キーとして未登録）"));
+        }
+        return NativeMethods.CallNextHookEx(systemKeyHook, code, wParam, lParam);
     }
     private IntPtr ModeKeyPressed(int code, IntPtr wParam, IntPtr lParam)
     {
@@ -645,7 +680,7 @@ public sealed class CaptureWindow : Window
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
-        if (IsImeModeKey(e)) { e.Handled = true; ToggleIme("キー"); return; }
+        if (IsImeModeKey(e) || e.Key == Key.F2) { e.Handled = true; ToggleIme("キー"); return; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
         else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0) { e.Handled = true; CommitText(); }
     }
