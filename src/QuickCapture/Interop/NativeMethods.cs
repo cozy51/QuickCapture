@@ -59,6 +59,9 @@ internal static class NativeMethods
     [DllImport("user32.dll")] internal static extern bool UnhookWindowsHookEx(IntPtr hook);
     [DllImport("user32.dll")] internal static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();
+    /// Which window the keyboard is actually talking to, so a watch on the whole
+    /// system only ever acts on keys meant for this app.
+    [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
     [DllImport("imm32.dll")] internal static extern bool ImmAssociateContextEx(IntPtr window, IntPtr context, uint flags);
     [DllImport("imm32.dll")] internal static extern IntPtr ImmGetContext(IntPtr window);
     [DllImport("imm32.dll")] internal static extern bool ImmReleaseContext(IntPtr window, IntPtr context);
