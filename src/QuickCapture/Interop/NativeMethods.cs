@@ -48,6 +48,11 @@ internal static class NativeMethods
     [DllImport("gdi32.dll")] internal static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
     [DllImport("gdi32.dll")] internal static extern bool DeleteObject(IntPtr obj);
     [DllImport("gdi32.dll", SetLastError = true)] internal static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sx, int sy, uint rop);
+    internal delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true)] internal static extern IntPtr SetWindowsHookEx(int type, HookProc proc, IntPtr module, uint thread);
+    [DllImport("user32.dll")] internal static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")] internal static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();
     [DllImport("imm32.dll")] internal static extern bool ImmAssociateContextEx(IntPtr window, IntPtr context, uint flags);
     [DllImport("imm32.dll")] internal static extern IntPtr ImmGetContext(IntPtr window);
     [DllImport("imm32.dll")] internal static extern bool ImmReleaseContext(IntPtr window, IntPtr context);

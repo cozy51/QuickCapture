@@ -51,6 +51,10 @@ public sealed class CaptureWindow : Window
     /// When the IME last changed mode on its own, so a key it already acted on is
     /// not acted on twice.
     private DateTime imeChangedAt;
+    /// Watches this thread's keys while a label is being typed: the mode key is
+    /// taken by the IME before any window sees it, and this runs earlier still.
+    private IntPtr modeKeyHook;
+    private NativeMethods.HookProc? modeKeyWatcher;
     private readonly Brush imeOnBrush = new SolidColorBrush(Color.FromRgb(47, 123, 246));
     private readonly Brush imeOffBrush = new SolidColorBrush(Color.FromRgb(96, 104, 116));
     private readonly Border status;
@@ -191,7 +195,8 @@ public sealed class CaptureWindow : Window
         Deactivated += (_, _) => { viewport.CancelInteraction(); toolbar.Visibility = Visibility.Collapsed; frame.CancelPointer(); };
         Closed += (_, _) =>
         {
-            closed = true; statusTimer.Stop(); statusTimer.Tick -= StatusExpired;
+            closed = true; StopWatchingModeKey();
+            statusTimer.Stop(); statusTimer.Tick -= StatusExpired;
             autoCloseTimer.Stop(); autoCloseTimer.Tick -= AutoCloseExpired;
             CaptureWindowRegistry.Unregister(this);
             frame.CloseRequested -= Close;
@@ -291,7 +296,7 @@ public sealed class CaptureWindow : Window
             handled = true;
         }
         // WM_KEYDOWN: the mode key is sometimes taken before WPF ever sees it.
-        else if (message == 0x0100 && textEditorRow.Visibility == Visibility.Visible && IsImeModeKey((int)wParam)) { ToggleIme(); handled = true; }
+        else if (message == 0x0100 && textEditorRow.Visibility == Visibility.Visible && IsImeModeKey((int)wParam)) { ToggleIme("キー"); handled = true; }
         // WM_IME_NOTIFY / IMN_SETOPENSTATUS: the IME changed mode by itself.
         else if (message == 0x0282 && wParam.ToInt64() == 0x0008) SyncIme();
         else if (message == 0x0005 && wParam.ToInt64() != 1) RememberPixelSize(hwnd); // WM_SIZE, not minimized
@@ -459,7 +464,7 @@ public sealed class CaptureWindow : Window
     {
         // While a label is being typed the keys belong to the text box, except the
         // one that turns Japanese input over.
-        if (textEditorRow.Visibility == Visibility.Visible && IsImeModeKey(e)) { e.Handled = true; ToggleIme(); return; }
+        if (textEditorRow.Visibility == Visibility.Visible && IsImeModeKey(e)) { e.Handled = true; ToggleIme("キー"); return; }
         if (textEditor.IsKeyboardFocusWithin) return;
         viewport.UpdateCursor();
         var modifiers = Keyboard.Modifiers;
@@ -531,6 +536,7 @@ public sealed class CaptureWindow : Window
         textEditor.Text = string.Empty; retyping = false;
         textEditorRow.Visibility = Visibility.Visible;
         if (Topmost) { textEditorHeldTopmost = true; Topmost = false; }
+        WatchModeKey();
         if (!IsActive) Activate();
         // A box that has just become visible is not arranged yet, and focus put on
         // it before that does not stick — which is what keeps the IME away.
@@ -564,7 +570,33 @@ public sealed class CaptureWindow : Window
     }
     /// VK_KANJI, VK_MODECHANGE, VK_OEM_AUTO and VK_OEM_ENLW: the keys a keyboard
     /// offers for turning Japanese input over.
-    private static bool IsImeModeKey(int key) => key is 0x19 or 0x1F or 0xF3 or 0xF4;
+    private static bool IsImeModeKey(int key) => key is 0x19 or 0x1F or (>= 0xF0 and <= 0xF5);
+    /// WH_KEYBOARD on this thread only, for as long as the editor is open.
+    private void WatchModeKey()
+    {
+        if (modeKeyHook != IntPtr.Zero) return;
+        modeKeyWatcher = ModeKeyPressed;
+        modeKeyHook = NativeMethods.SetWindowsHookEx(2, modeKeyWatcher, IntPtr.Zero, NativeMethods.GetCurrentThreadId());
+    }
+    private void StopWatchingModeKey()
+    {
+        if (modeKeyHook == IntPtr.Zero) return;
+        NativeMethods.UnhookWindowsHookEx(modeKeyHook);
+        modeKeyHook = IntPtr.Zero; modeKeyWatcher = null;
+    }
+    private IntPtr ModeKeyPressed(int code, IntPtr wParam, IntPtr lParam)
+    {
+        // Bit 31 is set while a key is released and bit 30 while it repeats, so
+        // only the first press of a mode key counts.
+        long state = lParam.ToInt64();
+        if (code >= 0 && (state & 0x80000000L) == 0 && (state & 0x40000000L) == 0
+            && IsImeModeKey((int)wParam) && textEditorRow.Visibility == Visibility.Visible)
+        {
+            ToggleIme("半角/全角キー");
+            return new IntPtr(1); // Taken here, so the IME does not act on it too.
+        }
+        return NativeMethods.CallNextHookEx(modeKeyHook, code, wParam, lParam);
+    }
     private static bool IsImeModeKey(KeyEventArgs e)
     {
         var key = e.Key == Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
@@ -585,7 +617,9 @@ public sealed class CaptureWindow : Window
     /// Turn Japanese input over to the other mode. Whether the IME took the key
     /// itself or ignored it, the state asked for is the one that ends up set, so
     /// pressing again always switches back.
-    private void ToggleIme()
+    /// <param name="via">Named in the status line, so it is clear which way the
+    /// mode was turned over when the keys and the button are both in play.</param>
+    private void ToggleIme(string via = "")
     {
         // The IME just did it itself, so this is the same press arriving twice.
         if ((DateTime.UtcNow - imeChangedAt).TotalMilliseconds < 300) return;
@@ -594,7 +628,7 @@ public sealed class CaptureWindow : Window
         {
             if (closed) return;
             ApplyIme(wanted);
-            ShowStatus(wanted ? "日本語入力 ON（あ）" : "日本語入力 OFF · 英数（A）");
+            ShowStatus((wanted ? "日本語入力 ON（あ）" : "日本語入力 OFF · 英数（A）") + (via.Length > 0 ? " · " + via : ""));
         });
     }
     /// A label was double clicked: open the editor on its own text, colour and
@@ -611,7 +645,7 @@ public sealed class CaptureWindow : Window
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
-        if (IsImeModeKey(e)) { e.Handled = true; ToggleIme(); return; }
+        if (IsImeModeKey(e)) { e.Handled = true; ToggleIme("キー"); return; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
         else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0) { e.Handled = true; CommitText(); }
     }
@@ -631,6 +665,7 @@ public sealed class CaptureWindow : Window
     private void CloseTextEditor()
     {
         textEditorRow.Visibility = Visibility.Collapsed; textEditor.Text = string.Empty; retyping = false;
+        StopWatchingModeKey();
         if (textEditorHeldTopmost) { Topmost = true; textEditorHeldTopmost = false; }
         if (!closed) viewport.Focus();
     }
