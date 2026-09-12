@@ -612,10 +612,6 @@ public sealed class CaptureWindow : Window
                 ToggleIme("半角/全角キー");
                 return new IntPtr(1); // Taken here, so nothing else acts on it.
             }
-            // A key only an IME keyboard sends, but not one this app knows: name it
-            // so the right code can be added rather than guessed at.
-            if (pressed.Key is (>= 0x15 and <= 0x1A) or (>= 0x1C and <= 0x1F) or (>= 0xF0 and <= 0xFF))
-                Dispatcher.BeginInvoke(() => ShowStatus($"キー 0x{pressed.Key:X2} を受け取りました（切替キーとして未登録）"));
         }
         return NativeMethods.CallNextHookEx(systemKeyHook, code, wParam, lParam);
     }
