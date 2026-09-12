@@ -48,6 +48,9 @@ public sealed class CaptureWindow : Window
     private bool retyping;
     /// Japanese input, on for the first label and then as the writer last left it.
     private bool imeOn = true;
+    /// When the IME last changed mode on its own, so a key it already acted on is
+    /// not acted on twice.
+    private DateTime imeChangedAt;
     private readonly Brush imeOnBrush = new SolidColorBrush(Color.FromRgb(47, 123, 246));
     private readonly Brush imeOffBrush = new SolidColorBrush(Color.FromRgb(96, 104, 116));
     private readonly Border status;
@@ -117,7 +120,7 @@ public sealed class CaptureWindow : Window
         // picture at the spot that was clicked and leaves a TextAnnotation behind.
         textEditor = new TextBox
         {
-            Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
             MinWidth = 60, MaxWidth = 640, BorderThickness = new Thickness(2), Padding = new Thickness(2, 0, 2, 0), AcceptsReturn = true,
             Background = new SolidColorBrush(Color.FromArgb(242, 255, 255, 255)),
             FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.NoWrap
@@ -134,7 +137,7 @@ public sealed class CaptureWindow : Window
         imeSwitch = new Border
         {
             CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 3, 7, 3), Margin = new Thickness(4, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Child = imeSwitchLabel,
+            Background = imeOnBrush, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Child = imeSwitchLabel,
             ToolTip = "日本語入力のON/OFF · 半角/全角キー / Ctrl+Space"
         };
         imeSwitch.MouseLeftButtonDown += (_, e) => { e.Handled = true; ToggleIme(); textEditor.Focus(); };
@@ -287,6 +290,10 @@ public sealed class CaptureWindow : Window
             Marshal.StructureToPtr(info, lParam, false);
             handled = true;
         }
+        // WM_KEYDOWN: the mode key is sometimes taken before WPF ever sees it.
+        else if (message == 0x0100 && textEditorRow.Visibility == Visibility.Visible && IsImeModeKey((int)wParam)) { ToggleIme(); handled = true; }
+        // WM_IME_NOTIFY / IMN_SETOPENSTATUS: the IME changed mode by itself.
+        else if (message == 0x0282 && wParam.ToInt64() == 0x0008) SyncIme();
         else if (message == 0x0005 && wParam.ToInt64() != 1) RememberPixelSize(hwnd); // WM_SIZE, not minimized
         else if (message == 0x02E0) UndoDpiResize(hwnd, Marshal.PtrToStructure<NativeMethods.RECT>(lParam).Pixels); // WM_DPICHANGED
         // WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE: only a size the user dragged counts
@@ -450,7 +457,9 @@ public sealed class CaptureWindow : Window
     }
     private void HandleKey(object sender, KeyEventArgs e)
     {
-        // While a label is being typed the keys belong to the text box.
+        // While a label is being typed the keys belong to the text box, except the
+        // one that turns Japanese input over.
+        if (textEditorRow.Visibility == Visibility.Visible && IsImeModeKey(e)) { e.Handled = true; ToggleIme(); return; }
         if (textEditor.IsKeyboardFocusWithin) return;
         viewport.UpdateCursor();
         var modifiers = Keyboard.Modifiers;
@@ -553,11 +562,33 @@ public sealed class CaptureWindow : Window
         }
         catch (Exception ex) { ShowStatus("日本語入力を切り替えられません: " + ex.Message); }
     }
+    /// VK_KANJI, VK_MODECHANGE, VK_OEM_AUTO and VK_OEM_ENLW: the keys a keyboard
+    /// offers for turning Japanese input over.
+    private static bool IsImeModeKey(int key) => key is 0x19 or 0x1F or 0xF3 or 0xF4;
+    private static bool IsImeModeKey(KeyEventArgs e)
+    {
+        var key = e.Key == Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
+        return key is Key.KanjiMode or Key.OemAuto or Key.OemEnlw or Key.ImeModeChange
+            || (key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) != 0);
+    }
+    /// The IME changed mode without being asked; follow it instead of fighting it.
+    private void SyncIme()
+    {
+        if (closed || textEditorRow.Visibility != Visibility.Visible) return;
+        bool on = NativeMethods.IsImeOn(new WindowInteropHelper(this).Handle);
+        if (on == imeOn) return;
+        imeOn = on; imeChangedAt = DateTime.UtcNow;
+        imeSwitchLabel.Text = on ? "あ" : "A";
+        imeSwitch.Background = on ? imeOnBrush : imeOffBrush;
+        ShowStatus(on ? "日本語入力 ON（あ）" : "日本語入力 OFF · 英数（A）");
+    }
     /// Turn Japanese input over to the other mode. Whether the IME took the key
     /// itself or ignored it, the state asked for is the one that ends up set, so
     /// pressing again always switches back.
     private void ToggleIme()
     {
+        // The IME just did it itself, so this is the same press arriving twice.
+        if ((DateTime.UtcNow - imeChangedAt).TotalMilliseconds < 300) return;
         bool wanted = !imeOn;
         Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
         {
@@ -580,13 +611,7 @@ public sealed class CaptureWindow : Window
     }
     private void TextEditorKey(object sender, KeyEventArgs e)
     {
-        // The IME takes the mode key for itself on some systems and ignores it on
-        // others; either way the pressed key is readable here, and the mode ends
-        // up as the press asked for rather than wherever the IME left it.
-        var key = e.Key == Key.ImeProcessed ? e.ImeProcessedKey : e.Key;
-        if (key is Key.KanjiMode or Key.OemAuto or Key.OemEnlw or Key.ImeModeChange
-            || (key == Key.Space && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
-        { e.Handled = true; ToggleIme(); return; }
+        if (IsImeModeKey(e)) { e.Handled = true; ToggleIme(); return; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelText(); }
         else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0) { e.Handled = true; CommitText(); }
     }
