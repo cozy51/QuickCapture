@@ -12,6 +12,10 @@
     <Version>1.7.0</Version>
     <!-- WPF owns startup/DPI; WinForms is used only for the notification icon. -->
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <!-- A self-contained publish carries the whole Windows Desktop runtime, whose
+         translated resources for thirteen languages take about 15 MB of it. Keep
+         the two the app is read in and leave the rest out of the exe. -->
+    <SatelliteResourceLanguages>en;ja</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup><Resource Include="Assets/QuickCapture.ico"/></ItemGroup>
 </Project>
