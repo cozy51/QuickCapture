@@ -252,9 +252,16 @@ public sealed class CaptureWindow : Window
     /// captures, and refreshes the clipboard so the copy matches what is shown.
     private void SetExportHeaderMode(bool enabled)
     {
-        try { setExportHeader(enabled); }
-        catch (Exception ex) { SetExportHeader(enabled); ShowStatus("設定を保存できません: " + ex.Message); return; }
+        if (!ApplyExportHeader(enabled)) return;
         _ = CopyAsync(false, enabled ? "カウンターと日時情報を含めてコピーし直しました" : "画像だけでコピーし直しました");
+    }
+    /// Saves the recording mode, falling back to this image alone when the file
+    /// cannot be written. False means the user has already been told why.
+    private bool ApplyExportHeader(bool enabled)
+    {
+        try { setExportHeader(enabled); }
+        catch (Exception ex) { SetExportHeader(enabled); ShowStatus("設定を保存できません: " + ex.Message); return false; }
+        return true;
     }
     /// The header of this window as copy and save should record it, or null while
     /// the export is the image alone.
@@ -263,10 +270,27 @@ public sealed class CaptureWindow : Window
     /// captures that follow. Images already open keep the mode they were given.
     private void SetNextCapturesAutoClose(bool enabled)
     {
-        try { setNextAutoClose(enabled); }
-        catch (Exception ex) { SetAutoClose(enabled); ShowStatus("設定を保存できません: " + ex.Message); return; }
-        SetAutoClose(enabled);
+        if (!ApplyAutoClose(enabled)) return;
         ShowStatus(enabled ? "この画像から3秒で閉じます" : "この画像から画面に残します");
+    }
+    private bool ApplyAutoClose(bool enabled)
+    {
+        try { setNextAutoClose(enabled); }
+        catch (Exception ex) { SetAutoClose(enabled); ShowStatus("設定を保存できません: " + ex.Message); return false; }
+        SetAutoClose(enabled);
+        return true;
+    }
+    internal const string ContinuousModeHeader = "連続モード（3秒で閉じる＋日時情報）";
+    /// The continuous mode is the pair of switches used together: this image closes
+    /// in three seconds and its copies carry the counter and the date. It counts as
+    /// on only while both are on, so one switch left off turns both on again.
+    internal bool ContinuousModeEnabled => AutoCloseEnabled && settings.ExportHeaderEnabled;
+    private void SetContinuousMode(bool enabled)
+    {
+        // The band is applied first so the re-copy that follows already carries it,
+        // and the three seconds start once the image has its final shape.
+        if (!ApplyExportHeader(enabled) || !ApplyAutoClose(enabled)) return;
+        _ = CopyAsync(false, enabled ? "連続モード: 3秒で閉じる＋カウンターと日時情報" : "連続モードを解除しました");
     }
     private void AutoCloseExpired(object? sender, EventArgs e)
     {
@@ -765,9 +789,14 @@ public sealed class CaptureWindow : Window
             item.Click += (_, _) => action(); menu.Items.Add(item);
         }
         Add("閉じる", "Delete", Close);
-        // The two switches used most often are set in bold so they stand out.
+        // The switches used most often are set in bold so they stand out.
         var autoClose = new MenuItem { Header = "この画像から3秒で閉じる", InputGestureText = "T", IsCheckable = true, FontWeight = FontWeights.Bold };
         autoClose.Click += (_, _) => { SetNextCapturesAutoClose(autoClose.IsChecked); autoClose.IsChecked = AutoCloseEnabled; }; menu.Items.Add(autoClose);
+        // One switch for the two above, marked in the blue of the recording band so
+        // it reads as its own mode rather than a third, unrelated option.
+        var continuousInk = new SolidColorBrush(Color.FromRgb(21, 62, 118)); continuousInk.Freeze();
+        var continuous = new MenuItem { Header = ContinuousModeHeader, IsCheckable = true, FontWeight = FontWeights.Bold, Foreground = continuousInk };
+        continuous.Click += (_, _) => { SetContinuousMode(continuous.IsChecked); continuous.IsChecked = ContinuousModeEnabled; }; menu.Items.Add(continuous);
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
         Add("PNGで保存…", "Ctrl+S", Save);
@@ -809,6 +838,7 @@ public sealed class CaptureWindow : Window
             label.IsChecked = viewport.Tool == DrawingTool.Text;
             autoClose.IsChecked = AutoCloseEnabled;
             exportHeader.IsChecked = settings.ExportHeaderEnabled;
+            continuous.IsChecked = ContinuousModeEnabled;
         };
         return menu;
     }

@@ -56,6 +56,7 @@ internal static class Program
                 await RecordHeaderMode(args.Contains("--integration"));
                 await AutoCloseWindows();
                 await NextCaptureMode();
+                await ContinuousMode();
                 await DrawingPreferences();
                 await ZoomWindowSizing();
                 await CaptureModeAppearance();
@@ -358,6 +359,59 @@ internal static class Program
         }
         finally { foreach (var window in opened) window.Close(); }
         passed++; Console.WriteLine("PASS Context menu switches that image at once / shared mode / continuous captures / other images unchanged");
+    }
+    private static async Task ContinuousMode()
+    {
+        var preferences = new AppSettings();
+        var opened = new List<CaptureWindow>();
+        CaptureWindow Create()
+        {
+            var window = new CaptureWindow(new ImageDocument(White()), new Int32Rect(200, 200, 200, 100), preferences with { },
+                enabled => preferences = preferences with { AutoCloseCaptures = enabled },
+                enabled =>
+                {
+                    preferences = preferences with { ExportHeaderEnabled = enabled };
+                    foreach (var open in opened) open.SetExportHeader(enabled);
+                });
+            opened.Add(window); window.Show(); return window;
+        }
+        MenuItem Item(CaptureWindow window, string header)
+        {
+            window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            return window.ContextMenu.Items.OfType<MenuItem>().Single(item => (item.Header as string) == header);
+        }
+        void Switch(MenuItem item, bool enabled)
+        {
+            item.IsChecked = enabled; item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        }
+        MenuItem Continuous(CaptureWindow window) => Item(window, CaptureWindow.ContinuousModeHeader);
+        try
+        {
+            var window = Create();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            var mode = Continuous(window);
+            Assert(mode.FontWeight == FontWeights.Bold && ((SolidColorBrush)mode.Foreground).Color == Color.FromRgb(21, 62, 118), "The continuous mode is emphasised in the menu");
+            Assert(!mode.IsChecked && !window.ContinuousModeEnabled, "Images start outside the continuous mode");
+            Switch(mode, true);
+            Assert(window.AutoCloseEnabled && preferences.AutoCloseCaptures, "The continuous mode closes this image and the ones after it in three seconds");
+            Assert(preferences.ExportHeaderEnabled && ((CaptureFrame)window.Content).RecordHeader, "The continuous mode records the counter and the date");
+            Assert(window.Countdown == "3", $"Switching it on starts the countdown at once: {window.Countdown}");
+            Assert(Continuous(window).IsChecked && window.ContinuousModeEnabled, "The one switch shows both are on");
+            Switch(Continuous(window), false);
+            Assert(!window.AutoCloseEnabled && !preferences.AutoCloseCaptures && !preferences.ExportHeaderEnabled, "Toggling it off releases both switches at once");
+            Assert(window.Countdown == null && !Continuous(window).IsChecked, "The image stays on screen and the switch reads off");
+            // With only one of the two on, the mode is off and one click completes it.
+            Switch(Item(window, "コピー対象に上部のカウンターと日時情報を含める"), true);
+            Assert(!Continuous(window).IsChecked, "One switch alone is not the continuous mode");
+            Switch(Continuous(window), true);
+            Assert(window.ContinuousModeEnabled && preferences.AutoCloseCaptures && preferences.ExportHeaderEnabled, "Switching it on from there turns the missing one on too");
+            Switch(Item(window, "この画像から3秒で閉じる"), false);
+            Assert(!Continuous(window).IsChecked && preferences.ExportHeaderEnabled, "Turning one switch off ends the mode and keeps the other");
+            var next = Create();
+            Assert(!next.ContinuousModeEnabled, "Later captures follow the switches that were left set");
+        }
+        finally { foreach (var window in opened) window.Close(); }
+        passed++; Console.WriteLine("PASS Continuous mode switches both at once / completes a half state / emphasised menu entry");
     }
     private static async Task CaptureModeAppearance()
     {
