@@ -116,3 +116,24 @@ public sealed class TextAnnotation : IAnnotation
         context.DrawGeometry(brush, null, glyphs);
     }
 }
+
+/// A mark moved as a whole, for a picture that was trimmed around it.
+public sealed class OffsetAnnotation : IAnnotation
+{
+    private readonly IAnnotation inner;
+    private readonly Vector offset;
+    private OffsetAnnotation(IAnnotation inner, Vector offset) { this.inner = inner; this.offset = offset; }
+    public static IAnnotation Create(IAnnotation annotation, Vector offset) => annotation switch
+    {
+        // Labels stay labels so they can still be moved and retyped.
+        TextAnnotation label => label.Moved(offset),
+        OffsetAnnotation moved => new OffsetAnnotation(moved.inner, moved.offset + offset),
+        _ => new OffsetAnnotation(annotation, offset)
+    };
+    public void Render(DrawingContext context)
+    {
+        context.PushTransform(new TranslateTransform(offset.X, offset.Y));
+        inner.Render(context);
+        context.Pop();
+    }
+}

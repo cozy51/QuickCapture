@@ -48,6 +48,7 @@ internal static class Program
                 Run("Header record / band above the capture / close button excluded", ExportHeader);
                 Run("Axis correction / preserves curves / corrected Undo and export", Straightening);
                 Run("Crop owns only selected pixels", Crop);
+                Run("Trim finds the high-contrast content / ignores soft bands and stray pixels", Trimming);
                 Run("Settings validation / persistence / corrupt JSON", Settings);
                 Run("Global shortcut conflict and cleanup", Hotkey);
                 await WindowsAndMemory();
@@ -57,6 +58,7 @@ internal static class Program
                 await AutoCloseWindows();
                 await NextCaptureMode();
                 await ContinuousMode();
+                await TrimAndCopyWindow();
                 await DrawingPreferences();
                 await ZoomWindowSizing();
                 await CaptureModeAppearance();
@@ -737,6 +739,58 @@ internal static class Program
         var source = BitmapSource.Create(64, 64, 96, 96, PixelFormats.Bgra32, null, spatial, 256);
         var crop = new CaptureService().Crop(source, new Int32Rect(21, 17, 13, 11)); var bytes = new byte[13 * 11 * 4]; crop.CopyPixels(bytes, 52, 0);
         Assert(bytes[0] == 21 && bytes[1] == 17 && bytes[^4] == 33 && bytes[^3] == 27, "Crop exact source offsets and stride");
+    }
+    /// A pink page on a dark desktop with a soft navy band and a stray light pixel,
+    /// the way a book cover is taken with a generous margin around it.
+    private static BitmapSource Framed(int w, int h, Int32Rect page)
+    {
+        var bytes = new byte[w * h * 4];
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+        {
+            int i = (y * w + x) * 4;
+            bool inside = x >= page.X && x < page.X + page.Width && y >= page.Y && y < page.Y + page.Height;
+            // Background: grey with a navy band fading in over several pixels.
+            byte band = (byte)Math.Clamp((y - 6) * 4, 0, 24);
+            (byte b, byte g, byte r) = inside ? ((byte)208, (byte)200, (byte)244) : ((byte)(58 + band), (byte)58, (byte)(58 - band / 2));
+            if (inside && x > page.X + 10 && x < page.X + 30 && y > page.Y + 10 && y < page.Y + 14) (b, g, r) = (0, 0, 0);
+            bytes[i] = b; bytes[i + 1] = g; bytes[i + 2] = r; bytes[i + 3] = 255;
+        }
+        int stray = (3 * w + 3) * 4; bytes[stray] = bytes[stray + 1] = bytes[stray + 2] = 255;
+        var bitmap = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, bytes, w * 4); bitmap.Freeze(); return bitmap;
+    }
+    private static void Trimming()
+    {
+        var page = new Int32Rect(40, 30, 120, 90);
+        Assert(ContentTrimmer.FindContent(Framed(240, 160, page)) == page, $"The page is found to the pixel: {ContentTrimmer.FindContent(Framed(240, 160, page))}");
+        Assert(ContentTrimmer.FindContent(White()) == null, "A plain image has nothing to trim to");
+        var edge = new Int32Rect(0, 0, 120, 90);
+        Assert(ContentTrimmer.FindContent(Framed(200, 140, edge)) == edge, "Content touching the corner keeps its edge pixels");
+    }
+    private static async Task TrimAndCopyWindow()
+    {
+        var page = new Int32Rect(40, 30, 120, 90);
+        var document = new ImageDocument(Framed(240, 160, page));
+        document.Add(new TextAnnotation("A", new Point(60, 50), Colors.Red, 20));
+        var window = new CaptureWindow(document, new Int32Rect(200, 200, 240, 160), new AppSettings());
+        CaptureWindow? trimmed = null;
+        try
+        {
+            window.Show();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            window.ContextMenu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            var item = window.ContextMenu.Items.OfType<MenuItem>().Single(i => (i.Header as string) == CaptureWindow.TrimCopyHeader);
+            Assert(CaptureWindow.TrimCopyHeader.Length <= 10, "The menu name stays short");
+            item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            trimmed = window.Trimmed;
+            Assert(trimmed != null && !window.IsVisible, "The trimmed picture replaces the wide capture");
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            Assert(trimmed!.CapturedAt == window.CapturedAt, "The trimmed picture keeps the capture time");
+            Assert(trimmed.Document.Width == page.Width && trimmed.Document.Height == page.Height, $"The page alone is kept: {trimmed.Document.Width} × {trimmed.Document.Height}");
+            Assert(trimmed.Document.Annotations.Single() is TextAnnotation { Origin: { X: 20.0, Y: 20.0 } }, "Labels move with the picture and stay editable");
+            Assert(trimmed.Document.History.CanUndo == false, "Carried marks are not a step to undo");
+        }
+        finally { window.Close(); trimmed?.Close(); }
+        passed++; Console.WriteLine("PASS Trim and copy reopens the page alone / keeps the time and the marks");
     }
     private static void Settings()
     {
