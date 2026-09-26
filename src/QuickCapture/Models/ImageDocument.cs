@@ -29,6 +29,9 @@ public sealed class ImageDocument(BitmapSource image, DateTimeOffset? capturedAt
         if (index < 0) return;
         History.Execute(new RemoveAction(annotations, index, annotation)); Changed?.Invoke();
     }
+    /// Annotations carried over from another capture of the same picture, as its
+    /// starting point rather than a step to undo.
+    public void Adopt(IEnumerable<IAnnotation> carried) { annotations.AddRange(carried); Changed?.Invoke(); }
     public void Clear() { if (annotations.Count == 0) return; History.Execute(new ClearAction(annotations)); Changed?.Invoke(); }
     public void Undo() { History.Undo(); Changed?.Invoke(); }
     public void Redo() { History.Redo(); Changed?.Invoke(); }

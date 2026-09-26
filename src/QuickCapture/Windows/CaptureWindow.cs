@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -32,6 +33,8 @@ public sealed class CaptureWindow : Window
     private readonly AppSettings settings;
     private readonly Action<bool> setNextAutoClose;
     private readonly Action<bool> setExportHeader;
+    /// The callbacks as the app handed them over, for a trimmed copy of this capture.
+    private readonly Action<bool>? givenNextAutoClose, givenExportHeader;
     /// Colour and width choices are kept for the captures that follow.
     private readonly Action<AppSettings> saveDrawing;
     private readonly ImageExportService exporter = new();
@@ -89,6 +92,7 @@ public sealed class CaptureWindow : Window
     public CaptureWindow(ImageDocument document, Int32Rect region, AppSettings? settings = null, Action<bool>? setNextAutoClose = null, Action<bool>? setExportHeader = null, Action<AppSettings>? saveDrawing = null)
     {
         this.document = document; this.settings = settings ?? new(); capturedRegion = region;
+        givenNextAutoClose = setNextAutoClose; givenExportHeader = setExportHeader;
         this.setNextAutoClose = setNextAutoClose ?? (enabled => this.settings.AutoCloseCaptures = enabled);
         this.setExportHeader = setExportHeader ?? (enabled => SetExportHeader(enabled));
         this.saveDrawing = saveDrawing ?? (_ => { });
@@ -291,6 +295,36 @@ public sealed class CaptureWindow : Window
         // and the three seconds start once the image has its final shape.
         if (!ApplyExportHeader(enabled) || !ApplyAutoClose(enabled)) return;
         _ = CopyAsync(false, enabled ? "連続モード: 3秒で閉じる＋カウンターと日時情報" : "連続モードを解除しました");
+    }
+    internal const string TrimCopyHeader = "余白カット＆コピー";
+    /// The capture opened on the trimmed picture, and the picture itself, for tests.
+    internal CaptureWindow? Trimmed { get; private set; }
+    internal ImageDocument Document => document;
+    /// For a capture taken with room to spare: keep only the part that stands out
+    /// strongly from the margin, reopen it on the very pixels it shows now and copy
+    /// it again. Marks already made move along with the picture.
+    internal void TrimAndCopy()
+    {
+        var image = document.Image;
+        if (closed || image == null) return;
+        CommitText(); viewport.CancelInteraction();
+        try
+        {
+            if (ContentTrimmer.FindContent(image) is not Int32Rect content) { ShowStatus("境目のはっきりした部分が見つかりません"); return; }
+            if (content.Width == document.Width && content.Height == document.Height) { ShowStatus("カットできる余白がありません"); return; }
+            var trimmed = new ImageDocument(new CaptureService().Crop(image, content), document.CapturedAt);
+            var offset = new Vector(-content.X, -content.Y);
+            trimmed.Adopt(document.Annotations.Select(annotation => OffsetAnnotation.Create(annotation, offset)).ToArray());
+            var at = viewport.PointToScreen(viewport.Zoom.ToViewport(new Point(content.X, content.Y)));
+            var region = new Int32Rect((int)Math.Round(at.X), (int)Math.Round(at.Y), content.Width, content.Height);
+            var window = new CaptureWindow(trimmed, region, settings with { AutoCloseCaptures = AutoCloseEnabled, AlwaysOnTop = Topmost },
+                givenNextAutoClose, givenExportHeader, saveDrawing);
+            Trimmed = window;
+            window.Show();
+            _ = window.CopyAsync(false, $"余白をカットしてコピーしました（{content.Width} × {content.Height}）");
+            Close();
+        }
+        catch (Exception ex) { ShowStatus("余白をカットできません: " + ex.Message); }
     }
     private void AutoCloseExpired(object? sender, EventArgs e)
     {
@@ -799,6 +833,7 @@ public sealed class CaptureWindow : Window
         continuous.Click += (_, _) => { SetContinuousMode(continuous.IsChecked); continuous.IsChecked = ContinuousModeEnabled; }; menu.Items.Add(continuous);
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
+        Add(TrimCopyHeader, "", TrimAndCopy);
         Add("PNGで保存…", "Ctrl+S", Save);
         var exportHeader = new MenuItem { Header = "コピー対象に上部のカウンターと日時情報を含める", IsCheckable = true, FontWeight = FontWeights.Bold };
         exportHeader.Click += (_, _) => SetExportHeaderMode(exportHeader.IsChecked);
