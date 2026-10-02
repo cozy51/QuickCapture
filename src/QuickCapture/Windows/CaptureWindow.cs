@@ -300,9 +300,11 @@ public sealed class CaptureWindow : Window
     /// The capture opened on the trimmed picture, and the picture itself, for tests.
     internal CaptureWindow? Trimmed { get; private set; }
     internal ImageDocument Document => document;
-    /// For a capture taken with room to spare: keep only the part that stands out
-    /// strongly from the margin, reopen it on the very pixels it shows now and copy
-    /// it again. Marks already made move along with the picture.
+    /// For a capture taken with room to spare: keep only the object that stands out
+    /// from the margin (a leaning one straightened), reopen it on the very pixels it
+    /// shows now and copy it again. Marks already made move along with the picture.
+    /// An outline the detection is not sure of is not cut: the capture stays as it is
+    /// for the range to be chosen by hand.
     internal void TrimAndCopy()
     {
         var image = document.Image;
@@ -310,18 +312,36 @@ public sealed class CaptureWindow : Window
         CommitText(); viewport.CancelInteraction();
         try
         {
-            if (ContentTrimmer.FindContent(image) is not Int32Rect content) { ShowStatus("境目のはっきりした部分が見つかりません"); return; }
-            if (content.Width == document.Width && content.Height == document.Height) { ShowStatus("カットできる余白がありません"); return; }
-            var trimmed = new ImageDocument(new CaptureService().Crop(image, content), document.CapturedAt);
-            var offset = new Vector(-content.X, -content.Y);
-            trimmed.Adopt(document.Annotations.Select(annotation => OffsetAnnotation.Create(annotation, offset)).ToArray());
+            if (ContentTrimmer.Detect(image) is not ContentTrimmer.Detection detection) { ShowStatus("境目のはっきりした部分が見つかりません"); return; }
+            if (!detection.Reliable)
+            {
+                ShowStatus($"対象の輪郭を確実に検出できません（信頼度 {detection.Confidence:P0}）。範囲を選び直してください");
+                return;
+            }
+            var content = detection.Bounds;
+            if (!detection.NeedsWarp && content.Width == document.Width && content.Height == document.Height) { ShowStatus("カットできる余白がありません"); return; }
+            ImageDocument trimmed;
+            if (detection.NeedsWarp)
+            {
+                var straightened = ContentTrimmer.Rectify(image, detection);
+                trimmed = new ImageDocument(straightened, document.CapturedAt);
+                var matrix = ContentTrimmer.RectifyTransform(detection, straightened.PixelWidth, straightened.PixelHeight);
+                trimmed.Adopt(document.Annotations.Select(annotation => (IAnnotation)new TransformedAnnotation(annotation, matrix)).ToArray());
+            }
+            else
+            {
+                trimmed = new ImageDocument(new CaptureService().Crop(image, content), document.CapturedAt);
+                var offset = new Vector(-content.X, -content.Y);
+                trimmed.Adopt(document.Annotations.Select(annotation => OffsetAnnotation.Create(annotation, offset)).ToArray());
+            }
             var at = viewport.PointToScreen(viewport.Zoom.ToViewport(new Point(content.X, content.Y)));
-            var region = new Int32Rect((int)Math.Round(at.X), (int)Math.Round(at.Y), content.Width, content.Height);
+            var region = new Int32Rect((int)Math.Round(at.X), (int)Math.Round(at.Y), trimmed.Width, trimmed.Height);
             var window = new CaptureWindow(trimmed, region, settings with { AutoCloseCaptures = AutoCloseEnabled, AlwaysOnTop = Topmost },
                 givenNextAutoClose, givenExportHeader, saveDrawing);
             Trimmed = window;
             window.Show();
-            _ = window.CopyAsync(false, $"余白をカットしてコピーしました（{content.Width} × {content.Height}）");
+            string how = detection.NeedsWarp ? "余白をカットし正面に補正してコピーしました" : "余白をカットしてコピーしました";
+            _ = window.CopyAsync(false, $"{how}（{trimmed.Width} × {trimmed.Height}）");
             Close();
         }
         catch (Exception ex) { ShowStatus("余白をカットできません: " + ex.Message); }

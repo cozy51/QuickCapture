@@ -765,6 +765,48 @@ internal static class Program
         Assert(ContentTrimmer.FindContent(White()) == null, "A plain image has nothing to trim to");
         var edge = new Int32Rect(0, 0, 120, 90);
         Assert(ContentTrimmer.FindContent(Framed(200, 140, edge)) == edge, "Content touching the corner keeps its edge pixels");
+
+        // A green book on a grey desk, close in colour and brightness, with a white title:
+        // the outline of the book is kept, not just the title.
+        var book = new[] { new Point(60, 40), new Point(260, 40), new Point(260, 320), new Point(60, 320) };
+        var found = ContentTrimmer.Detect(Book(320, 360, book, 3));
+        Assert(found is { Reliable: true, NeedsWarp: false }, $"The low-contrast book is found: {found}");
+        var bounds = found!.Bounds;
+        Assert(Math.Abs(bounds.X - 60) <= 1 && Math.Abs(bounds.Y - 40) <= 1 && Math.Abs(bounds.X + bounds.Width - 260) <= 1 && Math.Abs(bounds.Y + bounds.Height - 320) <= 1,
+            $"The whole book is kept, not only its title: {bounds}");
+        // Taken at an angle: the four corners are found and the cover straightened.
+        var leaning = new[] { new Point(80, 50), new Point(250, 70), new Point(270, 330), new Point(55, 310) };
+        var tilted = Book(320, 360, leaning, 5);
+        var straight = ContentTrimmer.Detect(tilted);
+        Assert(straight is { Reliable: true, NeedsWarp: true }, $"The leaning book is found: {straight}");
+        for (int i = 0; i < 4; i++)
+            Assert((straight!.Corners[i] - leaning[i]).Length <= 3, $"Corner {i} of the leaning book: {straight.Corners[i]} != {leaning[i]}");
+        var upright = ContentTrimmer.Rectify(tilted, straight!);
+        Assert(Math.Abs(upright.PixelWidth - 215) <= 4 && Math.Abs(upright.PixelHeight - 261) <= 4, $"The straightened cover keeps its size: {upright.PixelWidth} × {upright.PixelHeight}");
+        // Noise alone has no outline to trust: nothing is cut.
+        Assert(ContentTrimmer.FindContent(Noise(300, 240)) == null, "Noise is not taken for an object");
+    }
+    /// A green cover with a white title on a grey desk, the colours of a real photo.
+    private static BitmapSource Book(int w, int h, Point[] cover, int seed)
+    {
+        var random = new Random(seed); var bytes = new byte[w * h * 4];
+        double minX = cover.Min(p => p.X), maxX = cover.Max(p => p.X), minY = cover.Min(p => p.Y), maxY = cover.Max(p => p.Y);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+        {
+            var p = new Point(x + 0.5, y + 0.5); bool inside = true;
+            for (int k = 0; k < 4 && inside; k++) { var a = cover[k]; var b = cover[(k + 1) % 4]; inside = (b.X - a.X) * (p.Y - a.Y) - (b.Y - a.Y) * (p.X - a.X) >= 0; }
+            bool title = inside && x > minX + (maxX - minX) * 0.45 && x < maxX - (maxX - minX) * 0.2 && y > minY + 30 && y < maxY - 60 && (y / 12) % 2 == 0 && (x / 6) % 3 != 2;
+            (int b0, int g0, int r0) = title ? (235, 240, 240) : inside ? (64, 143, 85) : (94, 90, 88);
+            int i = (y * w + x) * 4, n = random.Next(-3, 4);
+            bytes[i] = (byte)(b0 + n); bytes[i + 1] = (byte)(g0 + n); bytes[i + 2] = (byte)(r0 + n); bytes[i + 3] = 255;
+        }
+        var bitmap = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, bytes, w * 4); bitmap.Freeze(); return bitmap;
+    }
+    private static BitmapSource Noise(int w, int h)
+    {
+        var random = new Random(7); var bytes = new byte[w * h * 4];
+        for (int i = 0; i < bytes.Length; i += 4) { byte v = (byte)random.Next(114, 127); bytes[i] = bytes[i + 1] = bytes[i + 2] = v; bytes[i + 3] = 255; }
+        var bitmap = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, bytes, w * 4); bitmap.Freeze(); return bitmap;
     }
     private static async Task TrimAndCopyWindow()
     {

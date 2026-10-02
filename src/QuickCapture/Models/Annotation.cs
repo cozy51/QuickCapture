@@ -137,3 +137,22 @@ public sealed class OffsetAnnotation : IAnnotation
         context.Pop();
     }
 }
+
+/// A mark carried onto a picture that was straightened, by the affine map closest
+/// to the perspective correction.
+public sealed class TransformedAnnotation : IAnnotation
+{
+    private readonly IAnnotation inner;
+    private readonly MatrixTransform transform;
+    public TransformedAnnotation(IAnnotation inner, Matrix matrix)
+    {
+        this.inner = inner;
+        transform = new MatrixTransform(matrix); transform.Freeze();
+    }
+    public void Render(DrawingContext context)
+    {
+        context.PushTransform(transform);
+        inner.Render(context);
+        context.Pop();
+    }
+}
