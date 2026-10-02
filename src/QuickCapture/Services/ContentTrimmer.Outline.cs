@@ -408,14 +408,46 @@ public static partial class ContentTrimmer
 
         // Lines through a busy or noisy image touch edges by chance this often.
         double chance = support.Count(v => v) / (double)support.Length;
-        Scored? best = null;
+        var scored = new List<Scored>();
         foreach (var quad in candidates)
         {
             double score = Score(quad, support, chance, channels, w, h, content);
-            if (score > (best?.Score ?? 0)) best = new Scored(Order(quad), score, stage.Name);
+            if (score > 0) scored.Add(new Scored(Order(quad), score, stage.Name));
+        }
+        if (scored.Count == 0) return null;
+        var best = scored.MaxBy(s => s.Score);
+        // A frame printed on a cover, or a picture on a page, is a rectangle inside the
+        // object: when a trustworthy rectangle with real edges on all four sides holds
+        // the best one, the outer one is the object. Step outwards as far as that goes.
+        for (bool widened = true; widened;)
+        {
+            widened = false;
+            double area = Area(best.Corners);
+            var outer = scored
+                .Where(s => s.Score >= Math.Max(MinConfidence + 0.1, 0.7 * best.Score) && !OnBorder(s.Corners, w, h)
+                    && Area(s.Corners) >= 1.03 * area && Encloses(s.Corners, best.Corners))
+                .OrderByDescending(s => Area(s.Corners)).FirstOrDefault();
+            if (outer.Corners != null) { best = outer; widened = true; }
         }
         return best;
     }
+
+    private static double Area(Point2[] q)
+    {
+        double area = 0;
+        for (int i = 0; i < 4; i++) area += q[i].X * q[(i + 1) % 4].Y - q[(i + 1) % 4].X * q[i].Y;
+        return Math.Abs(area) / 2;
+    }
+    /// Whether every corner of the inner quad lies inside the outer one (give or take a pixel).
+    private static bool Encloses(Point2[] outer, Point2[] inner) =>
+        inner.All(p => Enumerable.Range(0, 4).All(k => Cross(outer[k], outer[(k + 1) % 4], p) / Math.Max(1e-9, Distance(outer[k], outer[(k + 1) % 4])) >= -1.5));
+    /// Whether any side of the quad runs along the edge of the image.
+    private static bool OnBorder(Point2[] q, int width, int height) => Enumerable.Range(0, 4).Any(i =>
+    {
+        Point2 a = q[i], b = q[(i + 1) % 4];
+        return (Math.Abs(a.X) <= 1.5 && Math.Abs(b.X) <= 1.5) || (Math.Abs(a.Y) <= 1.5 && Math.Abs(b.Y) <= 1.5)
+            || (Math.Abs(a.X - (width - 1)) <= 1.5 && Math.Abs(b.X - (width - 1)) <= 1.5) || (Math.Abs(a.Y - (height - 1)) <= 1.5 && Math.Abs(b.Y - (height - 1)) <= 1.5);
+    });
 
     /// The part of the image that differs in Lab colour from the margin, split from it
     /// at the Otsu threshold of the colour difference, with small gaps closed.
