@@ -783,6 +783,11 @@ internal static class Program
             Assert((straight!.Corners[i] - leaning[i]).Length <= 3, $"Corner {i} of the leaning book: {straight.Corners[i]} != {leaning[i]}");
         var upright = ContentTrimmer.Rectify(tilted, straight!);
         Assert(Math.Abs(upright.PixelWidth - 215) <= 4 && Math.Abs(upright.PixelHeight - 261) <= 4, $"The straightened cover keeps its size: {upright.PixelWidth} × {upright.PixelHeight}");
+        // A cover with a dark frame printed inside it and a tab across its edge: the cover,
+        // the outer rectangle, is kept, not the frame with the cleaner edges.
+        var nested = ContentTrimmer.FindContent(FramedCover(320, 360, 60, 40, 260, 320, 20));
+        Assert(nested is Int32Rect n && Math.Abs(n.X - 60) <= 1 && Math.Abs(n.Y - 40) <= 1 && Math.Abs(n.X + n.Width - 260) <= 1 && Math.Abs(n.Y + n.Height - 320) <= 1,
+            $"The outer rectangle is kept, not the frame inside it: {nested}");
         // Noise alone has no outline to trust: nothing is cut.
         Assert(ContentTrimmer.FindContent(Noise(300, 240)) == null, "Noise is not taken for an object");
     }
@@ -799,6 +804,27 @@ internal static class Program
             (int b0, int g0, int r0) = title ? (235, 240, 240) : inside ? (64, 143, 85) : (94, 90, 88);
             int i = (y * w + x) * 4, n = random.Next(-3, 4);
             bytes[i] = (byte)(b0 + n); bytes[i + 1] = (byte)(g0 + n); bytes[i + 2] = (byte)(r0 + n); bytes[i + 3] = 255;
+        }
+        var bitmap = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, bytes, w * 4); bitmap.Freeze(); return bitmap;
+    }
+    /// A cream cover on a grey desk with a dark frame printed a little inside its edge.
+    private static BitmapSource FramedCover(int w, int h, int left, int top, int right, int bottom, int inset)
+    {
+        var bytes = new byte[w * h * 4];
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+        {
+            bool cover = x >= left && x < right && y >= top && y < bottom;
+            int fl = left + inset, ft = top + inset, fr = right - inset, fb = bottom - inset;
+            bool ring(int d, int t) => x >= fl + d && x < fr - d && y >= ft + d && y < fb - d && (x < fl + d + t || x >= fr - d - t || y < ft + d + t || y >= fb - d - t);
+            bool frame = cover && (ring(0, 5) || ring(9, 2));
+            // A dark spine along the right edge of the cover, a sticky tab across that edge
+            // and a dark bar along the top of the image.
+            bool spine = x >= right && x < right + 16 && y >= top && y < bottom, bar = y < 6;
+            bool tab = x >= right - 12 && x < right + 16 && y >= top + (bottom - top) / 5 && y < top + (bottom - top) * 2 / 5;
+            (byte b, byte g, byte r) = tab ? ((byte)235, (byte)240, (byte)245) : frame ? ((byte)40, (byte)40, (byte)40) : cover ? ((byte)190, (byte)246, (byte)255)
+                : spine ? ((byte)55, (byte)68, (byte)75) : bar ? ((byte)80, (byte)50, (byte)30) : ((byte)94, (byte)90, (byte)88);
+            int i = (y * w + x) * 4;
+            bytes[i] = b; bytes[i + 1] = g; bytes[i + 2] = r; bytes[i + 3] = 255;
         }
         var bitmap = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, bytes, w * 4); bitmap.Freeze(); return bitmap;
     }
