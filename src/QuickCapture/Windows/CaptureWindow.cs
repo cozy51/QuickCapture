@@ -289,6 +289,9 @@ public sealed class CaptureWindow : Window
     /// in three seconds and its copies carry the counter and the date. It counts as
     /// on only while both are on, so one switch left off turns both on again.
     internal bool ContinuousModeEnabled => AutoCloseEnabled && settings.ExportHeaderEnabled;
+    /// The S key flips the continuous mode the same way a click on its menu entry
+    /// does: a half state turns both switches on.
+    internal void ToggleContinuousMode() => SetContinuousMode(!ContinuousModeEnabled);
     private void SetContinuousMode(bool enabled)
     {
         // The band is applied first so the re-copy that follows already carries it,
@@ -581,6 +584,7 @@ public sealed class CaptureWindow : Window
                 case Key.P: if (!e.IsRepeat) viewport.TogglePen(); break;
                 case Key.X: if (!e.IsRepeat) viewport.ToggleText(); break;
                 case Key.T: if (!e.IsRepeat) SetNextCapturesAutoClose(!AutoCloseEnabled); break;
+                case Key.S: if (!e.IsRepeat) ToggleContinuousMode(); break;
                 case Key.F: viewport.CancelInteraction(); viewport.Fit(); break;
                 case Key.D1: case Key.NumPad1: viewport.CancelInteraction(); viewport.ActualSize(); break;
                 case Key.OemOpenBrackets: ChangeWidth(-1); break;
@@ -849,7 +853,7 @@ public sealed class CaptureWindow : Window
         // One switch for the two above, marked in the blue of the recording band so
         // it reads as its own mode rather than a third, unrelated option.
         var continuousInk = new SolidColorBrush(Color.FromRgb(21, 62, 118)); continuousInk.Freeze();
-        var continuous = new MenuItem { Header = ContinuousModeHeader, IsCheckable = true, FontWeight = FontWeights.Bold, Foreground = continuousInk };
+        var continuous = new MenuItem { Header = ContinuousModeHeader, InputGestureText = "S", IsCheckable = true, FontWeight = FontWeights.Bold, Foreground = continuousInk };
         continuous.Click += (_, _) => { SetContinuousMode(continuous.IsChecked); continuous.IsChecked = ContinuousModeEnabled; }; menu.Items.Add(continuous);
         menu.Items.Add(new Separator());
         Add("コピー", "Ctrl+C", () => _ = CopyAsync());
