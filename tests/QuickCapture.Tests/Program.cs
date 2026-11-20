@@ -409,11 +409,17 @@ internal static class Program
             Assert(window.ContinuousModeEnabled && preferences.AutoCloseCaptures && preferences.ExportHeaderEnabled, "Switching it on from there turns the missing one on too");
             Switch(Item(window, "この画像から3秒で閉じる"), false);
             Assert(!Continuous(window).IsChecked && preferences.ExportHeaderEnabled, "Turning one switch off ends the mode and keeps the other");
+            // The S key flips the mode like the menu entry, completing a half state too.
+            Assert(Continuous(window).InputGestureText == "S", "The menu shows the S key for the continuous mode");
+            window.ToggleContinuousMode();
+            Assert(window.ContinuousModeEnabled && preferences.AutoCloseCaptures && preferences.ExportHeaderEnabled, "The S key turns the continuous mode on from a half state");
+            window.ToggleContinuousMode();
+            Assert(!window.AutoCloseEnabled && !preferences.AutoCloseCaptures && !preferences.ExportHeaderEnabled, "The S key turns both switches off again");
             var next = Create();
             Assert(!next.ContinuousModeEnabled, "Later captures follow the switches that were left set");
         }
         finally { foreach (var window in opened) window.Close(); }
-        passed++; Console.WriteLine("PASS Continuous mode switches both at once / completes a half state / emphasised menu entry");
+        passed++; Console.WriteLine("PASS Continuous mode switches both at once / completes a half state / emphasised menu entry / S key");
     }
     private static async Task CaptureModeAppearance()
     {
