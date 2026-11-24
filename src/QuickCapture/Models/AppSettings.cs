@@ -25,6 +25,8 @@ public sealed record AppSettings
     public bool AutoCloseCaptures { get; set; }
     public bool ExportBorderEnabled { get; set; } = true;
     public bool ExportHeaderEnabled { get; set; }
+    /// Start in the tray when Windows signs in. On unless switched off.
+    public bool LaunchAtStartup { get; set; } = true;
 
     public void Validate()
     {

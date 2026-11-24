@@ -74,7 +74,15 @@ Windows 11向けの、画像をデスクトップに置いて参照するキャ�
 .\artifacts\win-x64-v1.7\QuickCapture.exe --background
 ```
 
-二重起動は防止します。通常の再起動操作は既存のプロセスにキャプチャ開始を依頼します。`--background`付きの二重起動は何もせず終了します。自動起動登録は行いません。
+二重起動は防止します。通常の再起動操作は既存のプロセスにキャプチャ開始を依頼します。`--background`付きの二重起動は何もせず終了します。
+
+### Windows起動時の自動起動
+
+一度起動すると、**Windowsへのサインイン時に自動でトレイに常駐**します（範囲選択は始まりません）。現在のユーザーの`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`に`"…\QuickCapture.exe" --background`を登録するため、管理者権限は不要で、他のユーザーには影響しません。
+
+- トレイ右クリックの**「Windows起動時に自動で起動」**、または「設定…」のチェックボックスでON／OFFを切り替えます。OFFにすると登録を削除します。
+- 新しい版を別フォルダーに置いて起動すると、登録先もその版のexeに自動で書き換わります。
+- タスクマネージャーの「スタートアップ アプリ」で無効にした場合はそちらが優先されます。
 
 ## ショートカット
 
@@ -231,7 +239,8 @@ WPF用にトリミングは有効にしていません。署名・インスト�
   "CloseAfterCopy": false,
   "AutoCloseCaptures": false,
   "ExportBorderEnabled": true,
-  "ExportHeaderEnabled": false
+  "ExportHeaderEnabled": false,
+  "LaunchAtStartup": true
 }
 ```
 
@@ -257,6 +266,7 @@ src/QuickCapture/
     ClipboardService.cs           Bitmap/PNG、短時間の再試行
     ImageExportService.cs        元解像度での描画合成、PNG保存
     SettingsService.cs           JSON読書きと復旧
+    StartupService.cs            Windows起動時の自動起動（HKCU\Run）の登録・解除
   Models/
     ImageDocument.cs             画像、注釈、描画コマンド
     Annotation.cs                注釈の描画契約、蛍光ペンの曲線

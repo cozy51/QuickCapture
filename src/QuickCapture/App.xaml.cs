@@ -22,6 +22,7 @@ public partial class App : Application
     private Forms.NotifyIcon? tray;
     private System.Drawing.Icon? trayIcon;
     private readonly SettingsService settingsService = new();
+    private readonly StartupService startup = new();
     private AppSettings settings = new();
     private SettingsWindow? settingsWindow;
     /// Runs before WPF touches the screen, so the process is per-monitor DPI aware
@@ -58,7 +59,14 @@ public partial class App : Application
             catch (Exception ex) { autoCloseMode.Checked = settings.AutoCloseCaptures; Notify("設定を保存できません: " + ex.Message); }
         };
         menu.Items.Add(autoCloseMode);
-        menu.Opening += (_, _) => autoCloseMode.Checked = settings.AutoCloseCaptures;
+        var launchAtStartup = new Forms.ToolStripMenuItem("Windows起動時に自動で起動") { CheckOnClick = true, Checked = settings.LaunchAtStartup };
+        launchAtStartup.Click += (_, _) =>
+        {
+            try { SetLaunchAtStartup(launchAtStartup.Checked); }
+            catch (Exception ex) { launchAtStartup.Checked = settings.LaunchAtStartup; Notify("自動起動を設定できません: " + ex.Message); }
+        };
+        menu.Items.Add(launchAtStartup);
+        menu.Opening += (_, _) => { autoCloseMode.Checked = settings.AutoCloseCaptures; launchAtStartup.Checked = settings.LaunchAtStartup; };
         menu.Items.Add("設定…", null, (_, _) => Dispatcher.BeginInvoke(OpenSettings));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("すべての画像を閉じる", null, (_, _) => { foreach (var window in Windows.OfType<CaptureWindow>().ToArray()) window.Close(); });
@@ -69,6 +77,10 @@ public partial class App : Application
         try { var gesture = AppSettings.ParseShortcut(settings.GlobalShortcut); hotkey.Register(gesture.Modifiers, gesture.Key); }
         catch (Exception ex) { Notify(ex.Message); }
         if (settingsService.LoadWarning != null) Notify(settingsService.LoadWarning);
+        // Keep the Run entry in step with the setting, and pointing at this exe
+        // even after a new version is placed in another folder.
+        try { startup.Apply(settings.LaunchAtStartup); }
+        catch (Exception ex) { Notify("自動起動を設定できません: " + ex.Message); }
         SystemEvents.DisplaySettingsChanged += DisplayChanged;
         if (!e.Args.Contains("--background")) Dispatcher.BeginInvoke(StartCapture);
     }
@@ -77,6 +89,14 @@ public partial class App : Application
     {
         var next = settings with { AutoCloseCaptures = enabled };
         settingsService.Save(next); settings = next;
+    }
+    private void SetLaunchAtStartup(bool enabled)
+    {
+        startup.Apply(enabled);
+        var next = settings with { LaunchAtStartup = enabled };
+        try { settingsService.Save(next); }
+        catch { try { startup.Apply(settings.LaunchAtStartup); } catch { } throw; }
+        settings = next;
     }
     /// A colour or width picked on any image becomes the default for the next ones.
     private void SaveDrawingPreferences(AppSettings from)
@@ -104,9 +124,10 @@ public partial class App : Application
             var gesture = AppSettings.ParseShortcut(next.GlobalShortcut);
             bool shortcutChanged = gesture != AppSettings.ParseShortcut(settings.GlobalShortcut) || !hotkey!.IsRegistered;
             if (shortcutChanged) hotkey!.Register(gesture.Modifiers, gesture.Key);
-            try { settingsService.Save(next); }
+            try { if (next.LaunchAtStartup != settings.LaunchAtStartup) startup.Apply(next.LaunchAtStartup); settingsService.Save(next); }
             catch
             {
+                try { startup.Apply(settings.LaunchAtStartup); } catch { }
                 if (shortcutChanged) { var previous = AppSettings.ParseShortcut(settings.GlobalShortcut); hotkey!.Register(previous.Modifiers, previous.Key); }
                 throw;
             }

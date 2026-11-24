@@ -36,6 +36,7 @@ public sealed class SettingsWindow : Window
         var exportHeader = new CheckBox { Content = "コピー・PNG保存画像に上部のカウンターと日時情報を含める", IsChecked = settings.ExportHeaderEnabled, Margin = new Thickness(0, 0, 0, 10) }; panel.Children.Add(exportHeader);
         var close = new CheckBox { Content = "コピー成功後に画像ウィンドウを閉じる", IsChecked = settings.CloseAfterCopy }; panel.Children.Add(close);
         var autoClose = new CheckBox { Content = "新しいキャプチャを3秒で閉じる", IsChecked = settings.AutoCloseCaptures, Margin = new Thickness(0, 10, 0, 0) }; panel.Children.Add(autoClose);
+        var launchAtStartup = new CheckBox { Content = "Windows起動時に自動で起動（トレイに常駐）", IsChecked = settings.LaunchAtStartup, Margin = new Thickness(0, 10, 0, 0) }; panel.Children.Add(launchAtStartup);
         var error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) }; panel.Children.Add(error);
         var save = new Button { Content = "設定を保存", Padding = new Thickness(16, 8, 16, 8), HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0), IsDefault = true }; panel.Children.Add(save);
         save.Click += (_, _) =>
@@ -43,7 +44,7 @@ public sealed class SettingsWindow : Window
             try
             {
                 if (!double.TryParse(width.Text, out double pixels)) throw new ArgumentException("線幅を数値で入力してください。");
-                var next = settings with { GlobalShortcut = shortcut.Text.Trim(), HighlighterColor = (string)((ComboBoxItem)color.SelectedItem).Tag, HighlighterWidth = pixels, AlwaysOnTop = topmost.IsChecked == true, CopyIncludesAnnotations = annotations.IsChecked == true, CloseAfterCopy = close.IsChecked == true, AutoCloseCaptures = autoClose.IsChecked == true };
+                var next = settings with { GlobalShortcut = shortcut.Text.Trim(), HighlighterColor = (string)((ComboBoxItem)color.SelectedItem).Tag, HighlighterWidth = pixels, AlwaysOnTop = topmost.IsChecked == true, CopyIncludesAnnotations = annotations.IsChecked == true, CloseAfterCopy = close.IsChecked == true, AutoCloseCaptures = autoClose.IsChecked == true, LaunchAtStartup = launchAtStartup.IsChecked == true };
                 next.ExportBorderEnabled = exportBorder.IsChecked == true;
                 next.ExportHeaderEnabled = exportHeader.IsChecked == true;
                 next.Validate(); apply(next); Close();
