@@ -50,6 +50,7 @@ internal static class Program
                 Run("Crop owns only selected pixels", Crop);
                 Run("Trim finds the high-contrast content / ignores soft bands and stray pixels", Trimming);
                 Run("Settings validation / persistence / corrupt JSON", Settings);
+                Run("Launch at sign-in registers / updates / removes the Run entry", Startup);
                 Run("Global shortcut conflict and cleanup", Hotkey);
                 await WindowsAndMemory();
                 await CaptureSequence();
@@ -875,9 +876,27 @@ internal static class Program
         File.WriteAllText(path, "{}"); Assert(!service.Load().AutoCloseCaptures, "Older settings default to retaining captures");
         Assert(service.Load().PenColor == AppSettings.DefaultPenColor && service.Load().TextColor == AppSettings.DefaultTextColor, "Older settings get the new pen and label colours");
         Assert(service.Load().ExportBorderEnabled && !service.Load().ExportHeaderEnabled, "Older settings enable the export border and record no header band");
+        Assert(service.Load().LaunchAtStartup, "Older settings start with Windows");
         File.WriteAllText(path, "{bad"); Assert(service.Load().GlobalShortcut == "Ctrl+Shift+R" && service.LoadWarning != null, "Corrupt JSON fallback");
         bool invalid = false; try { AppSettings.ParseShortcut("R"); } catch (ArgumentException) { invalid = true; } Assert(invalid, "Unmodified key rejected");
         File.Delete(path);
+    }
+    private static void Startup()
+    {
+        Assert(StartupService.BuildCommand(@"C:\Apps\QC v1.8\QuickCapture.exe", null) == "\"C:\\Apps\\QC v1.8\\QuickCapture.exe\" --background", "The exe path is quoted and starts in the tray");
+        Assert(StartupService.BuildCommand(@"C:\Program Files\dotnet\dotnet.exe", @"C:\QC\QuickCapture.dll") == "\"C:\\Program Files\\dotnet\\dotnet.exe\" \"C:\\QC\\QuickCapture.dll\" --background", "The shared host keeps the dll");
+        string key = @"Software\QuickCapture.Tests\Run";
+        try
+        {
+            var old = new StartupService(key, "\"C:\\old\\QuickCapture.exe\" --background");
+            Assert(!old.IsEnabled, "Nothing registered at first");
+            old.Apply(true); Assert(old.IsEnabled && old.RegisteredCommand == old.Command, "Registered");
+            var moved = new StartupService(key, "\"C:\\new\\QuickCapture.exe\" --background");
+            moved.Apply(true); Assert(moved.RegisteredCommand == moved.Command, "A new location replaces the old entry");
+            moved.Apply(false); Assert(!moved.IsEnabled, "Removed");
+            moved.Apply(false); Assert(!moved.IsEnabled, "Removing twice is harmless");
+        }
+        finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\QuickCapture.Tests", false); }
     }
     private static void Hotkey()
     {
